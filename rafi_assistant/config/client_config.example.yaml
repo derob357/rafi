@@ -1,0 +1,52 @@
+# Rafi Assistant - Client Configuration
+# Copy this file and fill in your values
+
+client:
+  name: "John Doe"
+  company: "Acme Corp"
+
+telegram:
+  bot_token: "YOUR_TELEGRAM_BOT_TOKEN"  # Get from @BotFather
+  user_id: 123456789                     # Get from @userinfobot
+
+twilio:
+  account_sid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  auth_token: "your_twilio_auth_token"
+  phone_number: "+1234567890"            # Twilio number (auto-provisioned by rafi_deploy)
+  client_phone: "+1987654321"            # Client's personal phone number
+
+elevenlabs:
+  api_key: "your_elevenlabs_api_key"
+  voice_id: "your_voice_id"             # ElevenLabs voice ID for TTS
+  agent_name: "Rafi"                     # Name the assistant uses
+  personality: "Professional, friendly, concise"
+
+llm:
+  provider: "openai"                     # openai | anthropic
+  model: "gpt-4o"                        # Model name
+  api_key: "sk-your_openai_api_key"
+
+google:
+  client_id: "your_google_client_id.apps.googleusercontent.com"
+  client_secret: "your_google_client_secret"
+  refresh_token: ""                      # Populated after OAuth flow
+
+supabase:
+  url: "https://your-project.supabase.co"
+  anon_key: "your_supabase_anon_key"
+  service_role_key: "your_supabase_service_role_key"
+
+deepgram:
+  api_key: "your_deepgram_api_key"
+
+weather:
+  api_key: "your_weatherapi_com_key"     # From weatherapi.com
+
+settings:
+  morning_briefing_time: "08:00"         # 24h format
+  quiet_hours_start: "22:00"             # No outbound calls after this
+  quiet_hours_end: "07:00"               # No outbound calls before this
+  reminder_lead_minutes: 15              # Minutes before event to remind
+  min_snooze_minutes: 5                  # Minimum snooze duration
+  save_to_disk: false                    # Save transcripts/logs to /data/logs/
+  timezone: "America/New_York"           # IANA timezone

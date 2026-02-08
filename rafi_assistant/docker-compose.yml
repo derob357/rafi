@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  rafi:
+    build: .
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - RAFI_CONFIG_PATH=/app/config.yaml
