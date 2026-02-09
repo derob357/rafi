@@ -18,30 +18,10 @@ import pytest
 # Import the sanitizer module.  If it does not exist yet, create local stubs
 # so the test file is syntactically complete and documents expected behaviour.
 # ---------------------------------------------------------------------------
-try:
-    from src.security.sanitizer import (
-        sanitize_input,
-        strip_html,
-        remove_control_characters,
-        remove_zero_width_characters,
-        detect_prompt_injection,
-    )
-except ImportError:
-    # Stubs — tests will fail with clear import errors when source is written.
-    def sanitize_input(text, max_length=4096):  # type: ignore[misc]
-        raise NotImplementedError("src.security.sanitizer.sanitize_input not yet implemented")
-
-    def strip_html(text):  # type: ignore[misc]
-        raise NotImplementedError("src.security.sanitizer.strip_html not yet implemented")
-
-    def remove_control_characters(text):  # type: ignore[misc]
-        raise NotImplementedError("src.security.sanitizer.remove_control_characters not yet implemented")
-
-    def remove_zero_width_characters(text):  # type: ignore[misc]
-        raise NotImplementedError("src.security.sanitizer.remove_zero_width_characters not yet implemented")
-
-    def detect_prompt_injection(text):  # type: ignore[misc]
-        raise NotImplementedError("src.security.sanitizer.detect_prompt_injection not yet implemented")
+from src.security.sanitizer import (
+    sanitize_text,
+    detect_prompt_injection,
+)
 
 
 # ===================================================================
@@ -53,29 +33,25 @@ class TestStripHtml:
     """HTML tags are removed while preserving inner text."""
 
     def test_simple_bold_tag(self):
-        assert strip_html("<b>Hello</b>") == "Hello"
+        assert sanitize_text("<b>Hello</b>") == "Hello"
 
     def test_nested_tags(self):
-        result = strip_html("<div><p>Hello <b>world</b></p></div>")
-        assert "Hello" in result
-        assert "world" in result
-        assert "<" not in result
+        result = sanitize_text("<div><p>Hello <b>world</b></p></div>")
+        assert result == "Hello world"
 
     def test_script_tag_removed(self):
-        result = strip_html('<script>alert("xss")</script>Text')
-        assert "alert" not in result or "script" not in result.lower()
-        assert "Text" in result
+        result = sanitize_text('<script>alert("xss")</script>Text')
+        assert result == "Text"
 
     def test_no_html_passes_unchanged(self):
-        assert strip_html("plain text") == "plain text"
+        assert sanitize_text("plain text") == "plain text"
 
     def test_html_entities(self):
-        result = strip_html("&amp; &lt; &gt;")
-        # Should decode or at least not crash
-        assert isinstance(result, str)
+        result = sanitize_text("&amp; &lt; &gt;")
+        assert result == "& < >"
 
     def test_empty_string(self):
-        assert strip_html("") == ""
+        assert sanitize_text("") == ""
 
 
 # ===================================================================
@@ -87,35 +63,35 @@ class TestRemoveControlCharacters:
     """Control characters (0x00-0x1F except tab/newline) are removed."""
 
     def test_null_byte(self):
-        result = remove_control_characters("hello\x00world")
+        result = sanitize_text("hello\x00world")
         assert "\x00" not in result
         assert "hello" in result
         assert "world" in result
 
     def test_bell_character(self):
-        result = remove_control_characters("test\x07value")
+        result = sanitize_text("test\x07value")
         assert "\x07" not in result
 
     def test_backspace(self):
-        result = remove_control_characters("test\x08value")
+        result = sanitize_text("test\x08value")
         assert "\x08" not in result
 
     def test_preserves_newlines(self):
-        result = remove_control_characters("line1\nline2")
+        result = sanitize_text("line1\nline2")
         assert "\n" in result
 
     def test_preserves_tabs(self):
-        result = remove_control_characters("col1\tcol2")
+        result = sanitize_text("col1\tcol2")
         assert "\t" in result
 
     def test_preserves_carriage_return(self):
-        result = remove_control_characters("line1\r\nline2")
+        result = sanitize_text("line1\r\nline2")
         assert "line1" in result
         assert "line2" in result
 
     def test_clean_text_unchanged(self):
         text = "Normal text with spaces and punctuation!"
-        assert remove_control_characters(text) == text
+        assert sanitize_text(text) == text
 
 
 # ===================================================================
@@ -127,28 +103,28 @@ class TestRemoveZeroWidthCharacters:
     """Zero-width Unicode characters are stripped."""
 
     def test_zero_width_space(self):
-        result = remove_zero_width_characters("hello\u200bworld")
+        result = sanitize_text("hello\u200bworld")
         assert "\u200b" not in result
 
     def test_zero_width_non_joiner(self):
-        result = remove_zero_width_characters("test\u200cvalue")
+        result = sanitize_text("test\u200cvalue")
         assert "\u200c" not in result
 
     def test_zero_width_joiner(self):
-        result = remove_zero_width_characters("test\u200dvalue")
+        result = sanitize_text("test\u200dvalue")
         assert "\u200d" not in result
 
     def test_zero_width_no_break_space(self):
-        result = remove_zero_width_characters("test\ufeffvalue")
+        result = sanitize_text("test\ufeffvalue")
         assert "\ufeff" not in result
 
     def test_word_joiner(self):
-        result = remove_zero_width_characters("test\u2060value")
+        result = sanitize_text("test\u2060value")
         assert "\u2060" not in result
 
     def test_clean_text_unchanged(self):
         text = "Normal ASCII text"
-        assert remove_zero_width_characters(text) == text
+        assert sanitize_text(text) == text
 
 
 # ===================================================================
@@ -161,27 +137,27 @@ class TestMaxLengthEnforcement:
 
     def test_short_text_unchanged(self):
         text = "Hello world"
-        result = sanitize_input(text, max_length=4096)
+        result = sanitize_text(text, max_length=4096)
         assert result == text
 
     def test_exact_limit_unchanged(self):
         text = "x" * 4096
-        result = sanitize_input(text, max_length=4096)
+        result = sanitize_text(text, max_length=4096)
         assert len(result) == 4096
 
     def test_over_limit_truncated(self):
         text = "x" * 5000
-        result = sanitize_input(text, max_length=4096)
+        result = sanitize_text(text, max_length=4096)
         assert len(result) <= 4096
 
     def test_voice_transcription_limit(self):
         text = "a" * 15000
-        result = sanitize_input(text, max_length=10000)
+        result = sanitize_text(text, max_length=10000)
         assert len(result) <= 10000
 
     def test_custom_short_limit(self):
         text = "Hello world, this is a test"
-        result = sanitize_input(text, max_length=5)
+        result = sanitize_text(text, max_length=5)
         assert len(result) <= 5
 
 
@@ -277,29 +253,27 @@ class TestCleanTextPassthrough:
 
     def test_simple_sentence(self):
         text = "Hello, how are you today?"
-        assert sanitize_input(text) == text
+        assert sanitize_text(text) == text
 
     def test_with_punctuation(self):
         text = "Meeting at 3:00 PM -- don't forget!"
-        result = sanitize_input(text)
-        assert "Meeting" in result
-        assert "3:00 PM" in result
+        result = sanitize_text(text)
+        assert result == text
 
     def test_with_numbers(self):
         text = "The price is $42.50 for 3 items."
-        result = sanitize_input(text)
-        assert "42.50" in result
+        result = sanitize_text(text)
+        assert result == text
 
     def test_with_unicode_letters(self):
         text = "Cafe with accents"
-        result = sanitize_input(text)
-        assert "Cafe" in result
+        result = sanitize_text(text)
+        assert result == text
 
     def test_multiline_text(self):
         text = "Line one.\nLine two.\nLine three."
-        result = sanitize_input(text)
-        assert "Line one" in result
-        assert "Line three" in result
+        result = sanitize_text(text)
+        assert result == text
 
 
 # ===================================================================
@@ -311,18 +285,12 @@ class TestNoneEmptyHandling:
     """None and empty string inputs are handled gracefully."""
 
     def test_none_input_returns_empty_or_raises(self):
-        # sanitize_input should either return "" or raise TypeError
-        try:
-            result = sanitize_input(None)  # type: ignore[arg-type]
-            assert result == "" or result is None
-        except (TypeError, AttributeError):
-            pass  # acceptable: refusing None input
+        assert sanitize_text(None) == ""
 
     def test_empty_string(self):
-        result = sanitize_input("")
+        result = sanitize_text("")
         assert result == ""
 
     def test_whitespace_only(self):
-        result = sanitize_input("   ")
-        # Should return either empty string or whitespace (implementation-specific)
-        assert isinstance(result, str)
+        result = sanitize_text("   ")
+        assert result == ""

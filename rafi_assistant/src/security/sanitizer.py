@@ -29,7 +29,7 @@ INJECTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"forget\s+(all\s+)?(previous|your\s+instructions|everything)", re.IGNORECASE),
     re.compile(r"you\s+are\s+now\s+(a|an|DAN)\b", re.IGNORECASE),
     re.compile(r"\bDAN\b.*\bDo\s+Anything\s+Now\b", re.IGNORECASE),
-    re.compile(r"new\s+(instructions?|system\s+prompt|task)\s*:", re.IGNORECASE),
+    re.compile(r"new\s+(instructions?|system\s+prompt|task)\s*(?::|is\s+to)", re.IGNORECASE),
     re.compile(r"\bsystem\s*:", re.IGNORECASE),
     re.compile(r"ASSISTANT\s*:", re.IGNORECASE),
     re.compile(r"###\s*ASSISTANT\s*###", re.IGNORECASE),
@@ -99,6 +99,9 @@ def sanitize_text(
 
     # Strip control characters (preserve tabs, newlines)
     result = CONTROL_CHARS.sub("", result)
+
+    # Remove style, script, and head blocks entirely
+    result = HTML_BLOCK_PATTERN.sub("", result)
 
     # Strip HTML tags
     result = HTML_TAG_PATTERN.sub("", result)

@@ -7,7 +7,7 @@ Verifies that all queries use parameterized inputs and search terms are escaped.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -62,52 +62,47 @@ SQL_INJECTION_PAYLOADS = [
 class TestTaskServiceSQLSafety:
     """SQL injection payloads in task operations should not execute raw SQL."""
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[:5])
-    def test_create_task_with_sql_payload_title(self, mock_supabase, mock_config, payload):
+    async def test_create_task_with_sql_payload_title(self, mock_supabase, mock_config, payload):
         """SQL in task title is stored as literal text, not executed."""
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "safe", "title": payload, "status": "pending"}]
+        mock_supabase.insert = AsyncMock(
+            return_value={"id": "safe", "title": payload, "status": "pending"}
         )
 
         svc = TaskService(db=mock_supabase)
-        # This must not cause SQL execution; the payload is a literal string
-        result = svc.create_task(title=payload)
+        result = await svc.create_task(title=payload)
 
-        # The insert should have been called with the payload as a parameter,
-        # not interpolated into SQL
-        insert_call = mock_supabase.table.return_value.insert.call_args
+        # The insert should have been called with the payload as a parameter
+        insert_call = mock_supabase.insert.call_args
         assert insert_call is not None
         # Verify the title was passed as data, not raw SQL
-        call_data = insert_call[0][0] if insert_call[0] else insert_call[1]
-        assert payload in str(call_data)
+        call_data = insert_call[0][1] if len(insert_call[0]) > 1 else insert_call[1]
+        assert payload.strip() in str(call_data)
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[5:10])
-    def test_list_tasks_with_sql_in_status_filter(self, mock_supabase, mock_config, payload):
+    async def test_list_tasks_with_sql_in_status_filter(self, mock_supabase, mock_config, payload):
         """SQL in status filter uses parameterized query."""
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
-            data=[]
-        )
+        mock_supabase.select = AsyncMock(return_value=[])
 
         svc = TaskService(db=mock_supabase)
-        result = svc.list_tasks(status=payload)
+        result = await svc.list_tasks(status=payload)
 
-        # The eq() method should have received the payload as a parameter
-        eq_call = mock_supabase.table.return_value.select.return_value.eq.call_args
-        if eq_call:
-            assert payload in str(eq_call)
+        # The service should have called select (possibly with or without filters)
+        mock_supabase.select.assert_called_once()
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[10:])
-    def test_update_task_with_sql_payload(self, mock_supabase, mock_config, payload):
+    async def test_update_task_with_sql_payload(self, mock_supabase, mock_config, payload):
         """SQL in update data is parameterized."""
-        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
-            data=[]
-        )
+        mock_supabase.update = AsyncMock(return_value={"id": "t1", "title": payload})
 
         svc = TaskService(db=mock_supabase)
-        result = svc.update_task(task_id="t1", title=payload)
+        result = await svc.update_task(task_id="t1", updates={"title": payload})
 
         # The update should use parameterized values
-        update_call = mock_supabase.table.return_value.update.call_args
+        update_call = mock_supabase.update.call_args
         assert update_call is not None
 
 
@@ -120,28 +115,30 @@ class TestTaskServiceSQLSafety:
 class TestNoteServiceSQLSafety:
     """SQL injection payloads in note operations are parameterized."""
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[:5])
-    def test_create_note_with_sql_in_content(self, mock_supabase, mock_config, payload):
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "safe", "title": "Note", "content": payload}]
+    async def test_create_note_with_sql_in_content(self, mock_supabase, mock_config, payload):
+        mock_supabase.insert = AsyncMock(
+            return_value={"id": "safe", "title": "Note", "content": payload}
         )
 
-        svc = NoteService(mock_config, mock_supabase)
-        result = svc.create_note(title="Note", content=payload)
+        svc = NoteService(mock_supabase)
+        result = await svc.create_note(title="Note", content=payload)
 
-        insert_call = mock_supabase.table.return_value.insert.call_args
+        insert_call = mock_supabase.insert.call_args
         assert insert_call is not None
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[5:10])
-    def test_update_note_with_sql_in_title(self, mock_supabase, mock_config, payload):
-        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
-            data=[]
+    async def test_update_note_with_sql_in_title(self, mock_supabase, mock_config, payload):
+        mock_supabase.update = AsyncMock(
+            return_value={"id": "n1", "title": payload}
         )
 
-        svc = NoteService(mock_config, mock_supabase)
-        result = svc.update_note(note_id="n1", title=payload)
+        svc = NoteService(mock_supabase)
+        result = await svc.update_note(note_id="n1", updates={"title": payload})
 
-        update_call = mock_supabase.table.return_value.update.call_args
+        update_call = mock_supabase.update.call_args
         assert update_call is not None
 
 
@@ -157,10 +154,9 @@ class TestMemoryServiceSQLSafety:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[:5])
     async def test_search_memory_with_sql_payload(self, mock_supabase, mock_openai, mock_config, payload):
-        mock_supabase.rpc.return_value = MagicMock(data=[])
-        embedding_data = MagicMock()
-        embedding_data.embedding = [0.01] * 3072
-        mock_openai.embeddings.create.return_value = MagicMock(data=[embedding_data])
+        mock_supabase.rpc = AsyncMock(return_value=[])
+        mock_supabase.embedding_search = AsyncMock(return_value=[])
+        mock_openai.embed = AsyncMock(return_value=[0.01] * 3072)
 
         svc = MemoryService(db=mock_supabase, llm=mock_openai)
         result = await svc.search_memory(payload)
@@ -171,16 +167,14 @@ class TestMemoryServiceSQLSafety:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("payload", SQL_INJECTION_PAYLOADS[:3])
     async def test_store_message_with_sql_payload(self, mock_supabase, mock_openai, mock_config, payload):
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[])
-        embedding_data = MagicMock()
-        embedding_data.embedding = [0.01] * 3072
-        mock_openai.embeddings.create.return_value = MagicMock(data=[embedding_data])
+        mock_supabase.insert = AsyncMock(return_value={"id": "safe"})
+        mock_openai.embed = AsyncMock(return_value=[0.01] * 3072)
 
         svc = MemoryService(db=mock_supabase, llm=mock_openai)
         await svc.store_message(role="user", content=payload, source="telegram_text")
 
         # Verify insert was called with parameterized data
-        insert_call = mock_supabase.table.return_value.insert.call_args
+        insert_call = mock_supabase.insert.call_args
         assert insert_call is not None
 
 
@@ -192,36 +186,39 @@ class TestMemoryServiceSQLSafety:
 class TestParameterizedQueries:
     """Verify that all services use supabase-py's parameterized interface."""
 
+    @pytest.mark.asyncio
     @pytest.mark.skipif(TaskService is None, reason="TaskService not yet implemented")
-    def test_no_raw_sql_in_task_service(self, mock_supabase, mock_config):
-        """TaskService should never call execute() with raw SQL strings."""
+    async def test_no_raw_sql_in_task_service(self, mock_supabase, mock_config):
+        """TaskService should use the SupabaseClient wrapper, not raw SQL."""
         svc = TaskService(db=mock_supabase)
 
-        # Perform all operations
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+        mock_supabase.insert = AsyncMock(return_value={"id": "t1", "title": "Test"})
+        mock_supabase.select = AsyncMock(return_value=[])
+        mock_supabase.update = AsyncMock(return_value={"id": "t1"})
+        mock_supabase.delete = AsyncMock(return_value=True)
 
-        svc.create_task(title="Test")
-        svc.list_tasks()
-        svc.update_task(task_id="t1", title="Updated")
-        svc.delete_task(task_id="t1")
+        await svc.create_task(title="Test")
+        await svc.list_tasks()
+        await svc.update_task(task_id="t1", updates={"title": "Updated"})
+        await svc.delete_task(task_id="t1")
 
-        # All operations should go through table().method() chains, not raw SQL
-        assert mock_supabase.table.called
-        # rpc should not have been called for basic CRUD
-        # (rpc is only for memory search with pgvector)
+        # All operations should go through the SupabaseClient wrapper methods
+        mock_supabase.insert.assert_called_once()
+        mock_supabase.select.assert_called_once()
+        mock_supabase.update.assert_called_once()
+        mock_supabase.delete.assert_called_once()
 
+    @pytest.mark.asyncio
     @pytest.mark.skipif(NoteService is None, reason="NoteService not yet implemented")
-    def test_no_raw_sql_in_note_service(self, mock_supabase, mock_config):
-        """NoteService should never call execute() with raw SQL strings."""
-        svc = NoteService(mock_config, mock_supabase)
+    async def test_no_raw_sql_in_note_service(self, mock_supabase, mock_config):
+        """NoteService should use the SupabaseClient wrapper, not raw SQL."""
+        svc = NoteService(mock_supabase)
 
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[])
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=[])
+        mock_supabase.insert = AsyncMock(return_value={"id": "n1", "title": "Test"})
+        mock_supabase.select = AsyncMock(return_value=[])
 
-        svc.create_note(title="Test", content="Content")
-        svc.list_notes()
+        await svc.create_note(title="Test", content="Content")
+        await svc.list_notes()
 
-        assert mock_supabase.table.called
+        mock_supabase.insert.assert_called_once()
+        mock_supabase.select.assert_called_once()

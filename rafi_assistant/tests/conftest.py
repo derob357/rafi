@@ -183,10 +183,16 @@ def mock_supabase() -> MagicMock:
     table_mock.order.return_value = table_mock
     table_mock.limit.return_value = table_mock
     table_mock.single.return_value = table_mock
-    table_mock.execute.return_value = MagicMock(data=[], count=0)
+    table_mock.execute.return_value = AsyncMock(return_value=MagicMock(data=[], count=0))
 
     client.table.return_value = table_mock
-    client.rpc.return_value = MagicMock(data=[], count=0)
+    client.insert = table_mock.insert
+    client.select = table_mock.select
+    client.update = table_mock.update
+    client.delete = table_mock.delete
+    client.rpc.return_value = AsyncMock(return_value=MagicMock(data=[], count=0))
+    client.upsert = AsyncMock(return_value=MagicMock(data=[], count=0))
+    client.embedding_search = AsyncMock(return_value=[])
 
     return client
 

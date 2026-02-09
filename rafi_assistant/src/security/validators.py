@@ -31,12 +31,7 @@ DATETIME_FORMATS = [
     "%Y-%m-%dT%H:%M:%S.%f%z",
     "%Y-%m-%dT%H:%M:%S",
     "%Y-%m-%dT%H:%M:%SZ",
-    "%Y-%m-%d %H:%M:%S",
-    "%Y-%m-%d %H:%M",
     "%Y-%m-%d",
-    "%m/%d/%Y %H:%M:%S",
-    "%m/%d/%Y %H:%M",
-    "%m/%d/%Y",
 ]
 
 
@@ -75,90 +70,93 @@ def safe_list_get(data: Optional[list[Any]], index: int, default: T = None) -> A
     if not isinstance(data, list):
         logger.warning("safe_list_get called with non-list type: %s", type(data).__name__)
         return default
-    if index < 0 or index >= len(data):
-        return default
-    return data[index]
+    if -len(data) <= index < len(data):
+        return data[index]
+    return default
 
 
-def validate_phone_number(phone: Optional[str]) -> Optional[str]:
+def validate_phone_number(phone: Optional[str]) -> bool:
     """Validate a phone number in E.164 format.
 
     Args:
         phone: Phone number string to validate.
 
     Returns:
-        The phone number if valid, None otherwise.
+        True when the phone string is valid, False otherwise.
     """
     if phone is None:
-        return None
+        return False
     if not isinstance(phone, str):
         logger.warning("validate_phone_number received non-string: %s", type(phone).__name__)
-        return None
+        return False
 
     phone = phone.strip()
     if PHONE_PATTERN.match(phone):
-        return phone
+        return True
 
     logger.debug("Invalid phone number format: %s", phone[:4] + "***")
-    return None
+    return False
 
 
-def validate_email_address(email: Optional[str]) -> Optional[str]:
+def validate_email_address(email: Optional[str]) -> bool:
     """Validate an email address format.
 
     Args:
         email: Email address string to validate.
 
     Returns:
-        The email address if valid, None otherwise.
+        True when the email string is valid, False otherwise.
     """
     if email is None:
-        return None
+        return False
     if not isinstance(email, str):
         logger.warning("validate_email_address received non-string: %s", type(email).__name__)
-        return None
+        return False
 
     email = email.strip().lower()
     if len(email) > 254:
         logger.debug("Email address exceeds maximum length: %d", len(email))
-        return None
+        return False
 
     if EMAIL_PATTERN.match(email):
-        return email
+        domain = email.split("@", 1)[1]
+        if "." in domain:
+            return True
+        logger.debug("Email missing top-level domain: %s", domain)
+        return False
 
     logger.debug("Invalid email address format")
-    return None
+    return False
 
 
-def validate_datetime_string(dt_str: Optional[str]) -> Optional[datetime]:
-    """Parse a datetime string in various common formats.
-
-    Tries multiple datetime formats and returns the first successful parse.
+def validate_datetime_string(dt_str: Optional[str]) -> bool:
+    """Check whether a datetime string parses against known formats.
 
     Args:
-        dt_str: Datetime string to parse.
+        dt_str: Datetime string to validate.
 
     Returns:
-        A datetime object if parsing succeeds, None otherwise.
+        True when the string matches at least one pattern, False otherwise.
     """
     if dt_str is None:
-        return None
+        return False
     if not isinstance(dt_str, str):
         logger.warning("validate_datetime_string received non-string: %s", type(dt_str).__name__)
-        return None
+        return False
 
     dt_str = dt_str.strip()
     if not dt_str:
-        return None
+        return False
 
     for fmt in DATETIME_FORMATS:
         try:
-            return datetime.strptime(dt_str, fmt)
+            datetime.strptime(dt_str, fmt)
+            return True
         except ValueError:
             continue
 
     logger.debug("Could not parse datetime string: %s", dt_str[:30])
-    return None
+    return False
 
 
 def validate_positive_int(value: Any, field_name: str = "value") -> Optional[int]:

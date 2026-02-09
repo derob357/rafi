@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Rafi is a template-based personal AI assistant platform. It consists of three repos in this directory:
 
-- **rafi_assistant/** — The AI assistant bot (Python, Docker). Each client gets their own container.
+- **rafi_assistant/** — The AI assistant bot (Python, Docker, PySide6). Includes 3D CAD, Web Automation, Screen Control, and Vision.
 - **rafi_deploy/** — CLI tooling for onboarding clients and deploying assistant instances.
-- **rafi_vision/** — (v2, not yet built) 3D gesture-controlled data visualization (Three.js + MediaPipe).
+- **rafi_vision/** — (Integrated into rafi_assistant) 3D gesture-controlled data visualization.
 
 Full spec: `RAFI_SPEC.md`
 

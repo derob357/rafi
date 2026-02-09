@@ -48,27 +48,27 @@ class TestNullInputBoundaries:
 
     def test_validate_phone_none(self) -> None:
         result = validate_phone_number(None)  # type: ignore
-        assert result is None
+        assert result is False
 
     def test_validate_phone_empty(self) -> None:
         result = validate_phone_number("")
-        assert result is None
+        assert result is False
 
     def test_validate_email_none(self) -> None:
         result = validate_email_address(None)  # type: ignore
-        assert result is None
+        assert result is False
 
     def test_validate_email_empty(self) -> None:
         result = validate_email_address("")
-        assert result is None
+        assert result is False
 
     def test_validate_datetime_none(self) -> None:
         result = validate_datetime_string(None)  # type: ignore
-        assert result is None
+        assert result is False
 
     def test_validate_datetime_empty(self) -> None:
         result = validate_datetime_string("")
-        assert result is None
+        assert result is False
 
 
 @pytest.mark.security

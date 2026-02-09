@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -61,12 +61,13 @@ def _task_record(
 class TestCreateTask:
     """create_task with all and minimal fields."""
 
-    def test_create_task_all_fields(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_create_task_all_fields(self, mock_supabase, mock_config):
         record = _task_record()
         mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[record])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.create_task(
+        svc = TaskService(mock_supabase)
+        result = await svc.create_task(
             title="Test Task",
             description="Task description",
             status="pending",
@@ -76,22 +77,24 @@ class TestCreateTask:
         mock_supabase.table.return_value.insert.assert_called_once()
         assert result is not None
 
-    def test_create_task_minimal_fields(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_create_task_minimal_fields(self, mock_supabase, mock_config):
         record = _task_record(description="", due_date=None)
         mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[record])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.create_task(title="Minimal Task")
+        svc = TaskService(mock_supabase)
+        result = await svc.create_task(title="Minimal Task")
 
         mock_supabase.table.return_value.insert.assert_called_once()
         assert result is not None
 
-    def test_create_task_returns_record(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_create_task_returns_record(self, mock_supabase, mock_config):
         record = _task_record(task_id="new-uuid")
         mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[record])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.create_task(title="New Task")
+        svc = TaskService(mock_supabase)
+        result = await svc.create_task(title="New Task")
 
         if isinstance(result, dict):
             assert result["id"] == "new-uuid"
@@ -101,32 +104,33 @@ class TestCreateTask:
 class TestListTasks:
     """list_tasks with and without status filter."""
 
-    def test_list_all_tasks(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_list_all_tasks(self, mock_supabase, mock_config):
         records = [_task_record("t1", "Task 1"), _task_record("t2", "Task 2")]
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=records)
+        mock_supabase.select = AsyncMock(return_value=records)
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.list_tasks()
+        svc = TaskService(mock_supabase)
+        result = await svc.list_tasks()
 
         assert isinstance(result, list)
         assert len(result) == 2
 
-    def test_list_tasks_with_status_filter(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_list_tasks_with_status_filter(self, mock_supabase, mock_config):
         records = [_task_record("t1", "Task 1", status="pending")]
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
-            data=records
-        )
+        mock_supabase.select = AsyncMock(return_value=records)
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.list_tasks(status="pending")
+        svc = TaskService(mock_supabase)
+        result = await svc.list_tasks(status="pending")
 
         assert isinstance(result, list)
 
-    def test_list_tasks_empty(self, mock_supabase, mock_config):
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=[])
+    @pytest.mark.asyncio
+    async def test_list_tasks_empty(self, mock_supabase, mock_config):
+        mock_supabase.select = AsyncMock(return_value=[])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.list_tasks()
+        svc = TaskService(mock_supabase)
+        result = await svc.list_tasks()
 
         assert result == []
 
@@ -135,25 +139,27 @@ class TestListTasks:
 class TestUpdateTask:
     """update_task modifies the correct record."""
 
-    def test_update_task_title(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_update_task_title(self, mock_supabase, mock_config):
         updated = _task_record("t1", "Updated Title")
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[updated]
         )
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.update_task(task_id="t1", title="Updated Title")
+        svc = TaskService(mock_supabase)
+        result = await svc.update_task(task_id="t1", updates={"title": "Updated Title"})
 
         mock_supabase.table.return_value.update.assert_called_once()
 
-    def test_update_task_status(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_update_task_status(self, mock_supabase, mock_config):
         updated = _task_record("t1", status="in_progress")
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[updated]
         )
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.update_task(task_id="t1", status="in_progress")
+        svc = TaskService(mock_supabase)
+        result = await svc.update_task(task_id="t1", updates={"status": "in_progress"})
 
         assert result is not None
 
@@ -162,11 +168,12 @@ class TestUpdateTask:
 class TestDeleteTask:
     """delete_task removes the correct record."""
 
-    def test_delete_task(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_delete_task(self, mock_supabase, mock_config):
         mock_supabase.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
 
-        svc = TaskService(mock_config, mock_supabase)
-        svc.delete_task(task_id="del-uuid")
+        svc = TaskService(mock_supabase)
+        await svc.delete_task(task_id="del-uuid")
 
         mock_supabase.table.return_value.delete.assert_called_once()
 
@@ -175,29 +182,28 @@ class TestDeleteTask:
 class TestCompleteTask:
     """complete_task sets status to 'completed'."""
 
-    def test_complete_task_sets_status(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_complete_task_sets_status(self, mock_supabase, mock_config):
         completed = _task_record("t1", status="completed")
-        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
-            data=[completed]
-        )
+        mock_supabase.update = AsyncMock(return_value=completed)
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.complete_task(task_id="t1")
+        svc = TaskService(mock_supabase)
+        result = await svc.complete_task(task_id="t1")
 
         # The update call should have set status to "completed"
-        call_args = mock_supabase.table.return_value.update.call_args
-        if call_args:
-            update_data = call_args[0][0] if call_args[0] else call_args[1]
-            assert "completed" in str(update_data)
+        call_args = mock_supabase.update.call_args
+        assert call_args is not None
+        assert call_args[1]["data"] == {"status": "completed"}
 
-    def test_complete_task_returns_updated_record(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_complete_task_returns_updated_record(self, mock_supabase, mock_config):
         completed = _task_record("t1", status="completed")
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[completed]
         )
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.complete_task(task_id="t1")
+        svc = TaskService(mock_supabase)
+        result = await svc.complete_task(task_id="t1")
 
         assert result is not None
 
@@ -206,31 +212,34 @@ class TestCompleteTask:
 class TestNullHandling:
     """Handles null/missing fields gracefully."""
 
-    def test_task_with_null_description(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_task_with_null_description(self, mock_supabase, mock_config):
         record = _task_record(description=None)  # type: ignore[arg-type]
         record["description"] = None
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=[record])
+        mock_supabase.select = AsyncMock(return_value=[record])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.list_tasks()
+        svc = TaskService(mock_supabase)
+        result = await svc.list_tasks()
 
         assert isinstance(result, list)
         assert len(result) == 1
 
-    def test_task_with_null_due_date(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_task_with_null_due_date(self, mock_supabase, mock_config):
         record = _task_record(due_date=None)
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=[record])
+        mock_supabase.select = AsyncMock(return_value=[record])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.list_tasks()
+        svc = TaskService(mock_supabase)
+        result = await svc.list_tasks()
 
         assert isinstance(result, list)
 
-    def test_task_with_missing_keys(self, mock_supabase, mock_config):
+    @pytest.mark.asyncio
+    async def test_task_with_missing_keys(self, mock_supabase, mock_config):
         record = {"id": "t1", "title": "Sparse Task"}
-        mock_supabase.table.return_value.select.return_value.execute.return_value = MagicMock(data=[record])
+        mock_supabase.select = AsyncMock(return_value=[record])
 
-        svc = TaskService(mock_config, mock_supabase)
-        result = svc.list_tasks()
+        svc = TaskService(mock_supabase)
+        result = await svc.list_tasks()
 
         assert isinstance(result, list)

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.db.supabase_client import SupabaseClient
+from src.utils.async_utils import await_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class TaskService:
         title: str,
         description: Optional[str] = None,
         due_date: Optional[str] = None,
+        status: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         """Create a new task.
 
@@ -33,6 +35,7 @@ class TaskService:
             title: Task title (required).
             description: Optional task description.
             due_date: Optional due date in ISO 8601 format.
+            status: Optional initial status (defaults to 'pending').
 
         Returns:
             Created task dict, or None on failure.
@@ -41,16 +44,22 @@ class TaskService:
             logger.warning("Attempted to create task with empty title")
             return None
 
+        valid_statuses = {"pending", "in_progress", "completed"}
+        target_status = (status or "pending").strip()
+        if target_status not in valid_statuses:
+            logger.warning("Invalid status '%s' for new task, defaulting to pending", target_status)
+            target_status = "pending"
+
         data: dict[str, Any] = {
             "title": title.strip(),
             "description": (description or "").strip(),
-            "status": "pending",
+            "status": target_status,
         }
 
         if due_date:
             data["due_date"] = due_date
 
-        result = await self._db.insert("tasks", data)
+        result = await await_if_needed(self._db.insert("tasks", data))
 
         if result:
             logger.info("Created task: %s (ID: %s)", title, result.get("id", "N/A"))
@@ -76,11 +85,13 @@ class TaskService:
         if status and status in ("pending", "in_progress", "completed"):
             filters = {"status": status}
 
-        tasks = await self._db.select(
-            "tasks",
-            filters=filters,
-            order_by="created_at",
-            order_desc=True,
+        tasks = await await_if_needed(
+            self._db.select(
+                "tasks",
+                filters=filters,
+                order_by="created_at",
+                order_desc=True,
+            )
         )
 
         logger.info("Listed %d tasks (status filter: %s)", len(tasks), status or "all")
@@ -98,10 +109,12 @@ class TaskService:
         if not task_id:
             return None
 
-        tasks = await self._db.select(
-            "tasks",
-            filters={"id": task_id},
-            limit=1,
+        tasks = await await_if_needed(
+            self._db.select(
+                "tasks",
+                filters={"id": task_id},
+                limit=1,
+            )
         )
 
         if tasks:
@@ -150,10 +163,12 @@ class TaskService:
                 )
                 return None
 
-        result = await self._db.update(
-            "tasks",
-            filters={"id": task_id},
-            data=filtered_updates,
+        result = await await_if_needed(
+            self._db.update(
+                "tasks",
+                filters={"id": task_id},
+                data=filtered_updates,
+            )
         )
 
         if result:
@@ -176,7 +191,7 @@ class TaskService:
             logger.warning("Attempted to delete task with empty ID")
             return False
 
-        success = await self._db.delete("tasks", filters={"id": task_id})
+        success = await await_if_needed(self._db.delete("tasks", filters={"id": task_id}))
 
         if success:
             logger.info("Deleted task %s", task_id)

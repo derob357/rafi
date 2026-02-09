@@ -20,6 +20,7 @@ from googleapiclient.discovery import build
 from src.config.loader import AppConfig
 from src.db.supabase_client import SupabaseClient
 from src.security.validators import safe_get
+from src.utils.async_utils import await_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,12 @@ class CalendarService:
             return self._credentials
 
         # Load tokens from Supabase
-        tokens = await self._db.select(
-            "oauth_tokens",
-            filters={"provider": "google"},
-            limit=1,
+        tokens = await await_if_needed(
+            self._db.select(
+                "oauth_tokens",
+                filters={"provider": "google"},
+                limit=1,
+            )
         )
 
         if not tokens:
@@ -102,20 +105,22 @@ class CalendarService:
                     new_access = self._fernet.encrypt(new_access.encode()).decode()
                     new_refresh = self._fernet.encrypt(new_refresh.encode()).decode()
 
-                await self._db.upsert(
-                    "oauth_tokens",
-                    {
-                        "provider": "google",
-                        "access_token": new_access,
-                        "refresh_token": new_refresh,
-                        "expires_at": (
-                            self._credentials.expiry.isoformat()
-                            if self._credentials.expiry
-                            else None
-                        ),
-                        "scopes": " ".join(SCOPES),
-                    },
-                    on_conflict="provider",
+                await await_if_needed(
+                    self._db.upsert(
+                        "oauth_tokens",
+                        {
+                            "provider": "google",
+                            "access_token": new_access,
+                            "refresh_token": new_refresh,
+                            "expires_at": (
+                                self._credentials.expiry.isoformat()
+                                if self._credentials.expiry
+                                else None
+                            ),
+                            "scopes": " ".join(SCOPES),
+                        },
+                        on_conflict="provider",
+                    )
                 )
             except Exception as e:
                 logger.error("Failed to refresh Google OAuth token: %s", e)
@@ -360,17 +365,19 @@ class CalendarService:
                 if not event_id:
                     continue
 
-                await self._db.upsert(
-                    "events_cache",
-                    {
-                        "google_event_id": event_id,
-                        "summary": event.get("summary", ""),
-                        "location": event.get("location", ""),
-                        "start_time": event.get("start", ""),
-                        "end_time": event.get("end", ""),
-                        "synced_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    on_conflict="google_event_id",
+                await await_if_needed(
+                    self._db.upsert(
+                        "events_cache",
+                        {
+                            "google_event_id": event_id,
+                            "summary": event.get("summary", ""),
+                            "location": event.get("location", ""),
+                            "start_time": event.get("start", ""),
+                            "end_time": event.get("end", ""),
+                            "synced_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                        on_conflict="google_event_id",
+                    )
                 )
                 synced += 1
 

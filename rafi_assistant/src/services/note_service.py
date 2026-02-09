@@ -9,6 +9,7 @@ import logging
 from typing import Any, Optional
 
 from src.db.supabase_client import SupabaseClient
+from src.utils.async_utils import await_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class NoteService:
             "content": (content or "").strip(),
         }
 
-        result = await self._db.insert("notes", data)
+        result = await await_if_needed(self._db.insert("notes", data))
 
         if result:
             logger.info("Created note: %s (ID: %s)", title, result.get("id", "N/A"))
@@ -57,10 +58,12 @@ class NoteService:
         Returns:
             List of note dicts.
         """
-        notes = await self._db.select(
-            "notes",
-            order_by="created_at",
-            order_desc=True,
+        notes = await await_if_needed(
+            self._db.select(
+                "notes",
+                order_by="created_at",
+                order_desc=True,
+            )
         )
 
         logger.info("Listed %d notes", len(notes))
@@ -78,10 +81,12 @@ class NoteService:
         if not note_id:
             return None
 
-        notes = await self._db.select(
-            "notes",
-            filters={"id": note_id},
-            limit=1,
+        notes = await await_if_needed(
+            self._db.select(
+                "notes",
+                filters={"id": note_id},
+                limit=1,
+            )
         )
 
         if notes:
@@ -117,10 +122,12 @@ class NoteService:
             logger.warning("No valid update fields provided for note %s", note_id)
             return None
 
-        result = await self._db.update(
-            "notes",
-            filters={"id": note_id},
-            data=filtered_updates,
+        result = await await_if_needed(
+            self._db.update(
+                "notes",
+                filters={"id": note_id},
+                data=filtered_updates,
+            )
         )
 
         if result:
@@ -143,7 +150,7 @@ class NoteService:
             logger.warning("Attempted to delete note with empty ID")
             return False
 
-        success = await self._db.delete("notes", filters={"id": note_id})
+        success = await await_if_needed(self._db.delete("notes", filters={"id": note_id}))
 
         if success:
             logger.info("Deleted note %s", note_id)

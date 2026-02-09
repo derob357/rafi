@@ -21,6 +21,7 @@ from src.config.loader import AppConfig
 from src.db.supabase_client import SupabaseClient
 from src.security.sanitizer import sanitize_email_body
 from src.security.validators import safe_get
+from src.utils.async_utils import await_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,12 @@ class EmailService:
         if self._credentials and self._credentials.valid:
             return self._credentials
 
-        tokens = await self._db.select(
-            "oauth_tokens",
-            filters={"provider": "google"},
-            limit=1,
+        tokens = await await_if_needed(
+            self._db.select(
+                "oauth_tokens",
+                filters={"provider": "google"},
+                limit=1,
+            )
         )
 
         if not tokens:
@@ -92,20 +95,22 @@ class EmailService:
                     new_access = self._fernet.encrypt(new_access.encode()).decode()
                     new_refresh = self._fernet.encrypt(new_refresh.encode()).decode()
 
-                await self._db.upsert(
-                    "oauth_tokens",
-                    {
-                        "provider": "google",
-                        "access_token": new_access,
-                        "refresh_token": new_refresh,
-                        "expires_at": (
-                            self._credentials.expiry.isoformat()
-                            if self._credentials.expiry
-                            else None
-                        ),
-                        "scopes": " ".join(SCOPES),
-                    },
-                    on_conflict="provider",
+                await await_if_needed(
+                    self._db.upsert(
+                        "oauth_tokens",
+                        {
+                            "provider": "google",
+                            "access_token": new_access,
+                            "refresh_token": new_refresh,
+                            "expires_at": (
+                                self._credentials.expiry.isoformat()
+                                if self._credentials.expiry
+                                else None
+                            ),
+                            "scopes": " ".join(SCOPES),
+                        },
+                        on_conflict="provider",
+                    )
                 )
             except Exception as e:
                 logger.error("Gmail OAuth token refresh failed: %s", e)

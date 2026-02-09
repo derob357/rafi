@@ -38,10 +38,11 @@ class WeatherService:
             await self._client.aclose()
             logger.debug("Weather service client closed")
 
-    def _get_client(self) -> httpx.AsyncClient:
-        """Get the HTTP client, ensuring it is initialized."""
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or initialize the HTTP client internally."""
         if self._client is None:
-            raise RuntimeError("Weather service not initialized. Call initialize() first.")
+            await self.initialize()
+        assert self._client is not None
         return self._client
 
     async def get_weather(self, location: str) -> str:
@@ -57,7 +58,7 @@ class WeatherService:
         if not location or not location.strip():
             return "Weather information unavailable: no location provided."
 
-        client = self._get_client()
+        client = await self._get_client()
 
         try:
             response = await client.get(

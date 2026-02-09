@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from src.db.supabase_client import SupabaseClient
 from src.llm.provider import LLMProvider
+from src.utils.async_utils import await_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class MemoryService:
         if embedding is not None:
             data["embedding"] = embedding
 
-        result = await self._db.insert("messages", data)
+        result = await await_if_needed(self._db.insert("messages", data))
 
         if result:
             logger.debug(
@@ -105,14 +106,16 @@ class MemoryService:
             return await self._text_search_fallback(query, limit)
 
         # Hybrid search via RPC
-        results = await self._db.rpc(
-            "hybrid_search_messages",
-            {
-                "query_embedding": query_embedding,
-                "query_text": query,
-                "match_count": limit,
-                "match_threshold": 0.5,
-            },
+        results = await await_if_needed(
+            self._db.rpc(
+                "hybrid_search_messages",
+                {
+                    "query_embedding": query_embedding,
+                    "query_text": query,
+                    "match_count": limit,
+                    "match_threshold": 0.5,
+                },
+            )
         )
 
         if results and isinstance(results, list):
@@ -120,10 +123,12 @@ class MemoryService:
             return results
 
         # Fall back to vector-only search
-        results = await self._db.embedding_search(
-            query_embedding=query_embedding,
-            match_count=limit,
-            match_threshold=0.5,
+        results = await await_if_needed(
+            self._db.embedding_search(
+                query_embedding=query_embedding,
+                match_count=limit,
+                match_threshold=0.5,
+            )
         )
 
         if results:
@@ -166,6 +171,8 @@ class MemoryService:
     async def get_recent_messages(
         self,
         limit: int = 20,
+        *,
+        count: int | None = None,
     ) -> list[dict[str, Any]]:
         """Get the most recent messages for conversation context.
 
@@ -174,16 +181,21 @@ class MemoryService:
 
         Args:
             limit: Maximum number of messages to return (default 20).
+            count: Optional alias for limit used by some callers.
 
         Returns:
             List of message dicts in chronological order.
         """
-        messages = await self._db.select(
-            "messages",
-            columns="id, role, content, source, created_at",
-            order_by="created_at",
-            order_desc=True,
-            limit=limit,
+        effective_limit = count if count is not None else limit
+
+        messages = await await_if_needed(
+            self._db.select(
+                "messages",
+                columns="id, role, content, source, created_at",
+                order_by="created_at",
+                order_desc=True,
+                limit=effective_limit,
+            )
         )
 
         # Reverse to get chronological order (oldest first)

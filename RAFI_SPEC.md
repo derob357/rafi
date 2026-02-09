@@ -12,9 +12,9 @@ The project consists of three repositories:
 
 | Repo | Purpose | Phase |
 |------|---------|-------|
-| **rafi_assistant** | The AI assistant bot (per-client instance) | v1 |
+| **rafi_assistant** | The AI assistant bot (per-client instance). Includes personal productivity tools + ADA-parity features (CAD, Web Agent). | v1 |
 | **rafi_deploy** | Onboarding, config generation, deploy automation | v1 |
-| **rafi_vision** | 3D gesture-controlled data visualization | v2 |
+| **rafi_vision** | (Merged into assistant) Desktop UI with 3D gesture-controlled data visualization | v2 |
 
 ---
 
@@ -255,6 +255,13 @@ rafi_assistant/
 - **Name**: Custom assistant name
 - **Personality**: Custom personality/style instructions
 - **LLM**: Configurable (OpenAI default, can switch to Claude or others)
+
+#### 11. Multimodal ADA-Parity Features
+- **Vision Capture**: Real-time screen and camera monitoring via `CaptureDispatcher`.
+- **CAD/3D Modeling**: Generative parametric 3D modeling using `build123d`.
+- **Web Automation**: Autonomous browsing and information extraction using `Playwright`.
+- **Desktop Automation**: Local machine control (mouse/keyboard) via `pyautogui`.
+- **Voice Intelligence**: Integrated VAD (Voice Activity Detection) for hands-free interaction.
 
 ### Data Model (Supabase — one project per client)
 

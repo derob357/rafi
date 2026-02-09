@@ -80,7 +80,8 @@ def _mock_google_service(events: List[Dict[str, Any]] | None = None):
 class TestListEvents:
     """list_events returns formatted events."""
 
-    def test_returns_list_of_events(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_returns_list_of_events(self, mock_config):
         events = [
             _build_google_event("e1", "Standup", "Room A"),
             _build_google_event("e2", "Lunch", "Cafeteria"),
@@ -89,18 +90,19 @@ class TestListEvents:
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            result = svc.list_events()
+            result = await svc.list_events()
 
         assert isinstance(result, list)
         assert len(result) == 2
 
-    def test_event_contains_summary(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_event_contains_summary(self, mock_config):
         events = [_build_google_event("e1", "Board Meeting")]
         google_svc = _mock_google_service(events)
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            result = svc.list_events()
+            result = await svc.list_events()
 
         # Result should contain event summary information
         first = result[0] if isinstance(result[0], dict) else result[0]
@@ -109,12 +111,13 @@ class TestListEvents:
         else:
             assert "Board Meeting" in str(first)
 
-    def test_handles_empty_calendar(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_handles_empty_calendar(self, mock_config):
         google_svc = _mock_google_service([])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            result = svc.list_events()
+            result = await svc.list_events()
 
         assert result == [] or result is not None
 
@@ -123,13 +126,14 @@ class TestListEvents:
 class TestCreateEvent:
     """create_event builds the correct API request."""
 
-    def test_create_event_calls_insert(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_create_event_calls_insert(self, mock_config):
         new_event = _build_google_event("new_1", "New Meeting", "Room C")
         google_svc = _mock_google_service([new_event])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            result = svc.create_event(
+            result = await svc.create_event(
                 summary="New Meeting",
                 start="2025-06-20T14:00:00-04:00",
                 end="2025-06-20T15:00:00-04:00",
@@ -139,13 +143,14 @@ class TestCreateEvent:
         # Verify insert was called
         google_svc.events().insert.assert_called_once()
 
-    def test_create_event_returns_event(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_create_event_returns_event(self, mock_config):
         new_event = _build_google_event("new_2", "Lunch")
         google_svc = _mock_google_service([new_event])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            result = svc.create_event(
+            result = await svc.create_event(
                 summary="Lunch",
                 start="2025-06-20T12:00:00-04:00",
                 end="2025-06-20T13:00:00-04:00",
@@ -158,23 +163,25 @@ class TestCreateEvent:
 class TestUpdateEvent:
     """update_event modifies the correct fields."""
 
-    def test_update_event_calls_update(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_update_event_calls_update(self, mock_config):
         event = _build_google_event("upd_1", "Old Title")
         google_svc = _mock_google_service([event])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            svc.update_event(event_id="upd_1", summary="New Title")
+            await svc.update_event(event_id="upd_1", updates={"summary": "New Title"})
 
         google_svc.events().update.assert_called_once()
 
-    def test_update_event_passes_correct_id(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_update_event_passes_correct_id(self, mock_config):
         event = _build_google_event("upd_2", "Title")
         google_svc = _mock_google_service([event])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            svc.update_event(event_id="upd_2", summary="Updated Title")
+            await svc.update_event(event_id="upd_2", updates={"summary": "Updated Title"})
 
         call_kwargs = google_svc.events().update.call_args
         # eventId should be present in the call
@@ -185,21 +192,23 @@ class TestUpdateEvent:
 class TestDeleteEvent:
     """delete_event calls the correct API endpoint."""
 
-    def test_delete_event_calls_delete(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_delete_event_calls_delete(self, mock_config):
         google_svc = _mock_google_service([])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            svc.delete_event(event_id="del_1")
+            await svc.delete_event(event_id="del_1")
 
         google_svc.events().delete.assert_called_once()
 
-    def test_delete_event_uses_correct_id(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_delete_event_uses_correct_id(self, mock_config):
         google_svc = _mock_google_service([])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            svc.delete_event(event_id="del_2")
+            await svc.delete_event(event_id="del_2")
 
         call_args = google_svc.events().delete.call_args
         assert "del_2" in str(call_args)
@@ -209,13 +218,14 @@ class TestDeleteEvent:
 class TestNoneLocation:
     """Events with None location are handled gracefully."""
 
-    def test_event_without_location(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_event_without_location(self, mock_config):
         event = _build_google_event("no_loc", "Virtual Meeting", location=None)
         google_svc = _mock_google_service([event])
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc):
             svc = CalendarService(config=mock_config, db=MagicMock())
-            result = svc.list_events()
+            result = await svc.list_events()
 
         assert len(result) >= 0  # Should not raise
 
@@ -224,7 +234,8 @@ class TestNoneLocation:
 class TestOAuthRefresh:
     """OAuth token refresh on 401 responses."""
 
-    def test_refreshes_token_on_401(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_refreshes_token_on_401(self, mock_config):
         from googleapiclient.errors import HttpError
 
         google_svc = _mock_google_service([])
@@ -242,11 +253,11 @@ class TestOAuthRefresh:
         ]
 
         with patch.object(CalendarService, "_get_service", return_value=google_svc), \
-             patch.object(CalendarService, "_refresh_token") as mock_refresh:
+             patch.object(CalendarService, "initialize", new_callable=AsyncMock) as mock_init:
             svc = CalendarService(config=mock_config, db=MagicMock())
             try:
-                result = svc.list_events()
-                mock_refresh.assert_called()
+                result = await svc.list_events()
+                mock_init.assert_called()
             except Exception:
                 # If the service doesn't implement retry, that is also documented
                 pass

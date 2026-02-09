@@ -11,4 +11,4 @@ dist/
 pip-wheel-metadata/
 .idea/
 .vscode/
-.DS_Store
+.DS_Store.env

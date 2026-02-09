@@ -524,6 +524,131 @@ RECALL_MEMORY_TOOL: dict[str, Any] = {
 }
 
 # =============================================================================
+# ADA v2 Tools (CAD & Browser)
+# =============================================================================
+
+GENERATE_CAD_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "generate_cad",
+        "description": (
+            "Generate a 3D model (CAD) using build123d. "
+            "Accepts a natural language prompt and a Python script using build123d library."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "User's original description of the object to create.",
+                },
+                "script_code": {
+                    "type": "string",
+                    "description": "Python code using build123d. Must define 'result_part' for export.",
+                },
+            },
+            "required": ["prompt", "script_code"],
+        },
+    },
+}
+
+BROWSE_WEB_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "browse_web",
+        "description": "Navigate to a URL and extract title and screenshot.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to visit.",
+                },
+                "action_prompt": {
+                    "type": "string",
+                    "description": "Optional instructions for what to look for or do on the page.",
+                },
+            },
+            "required": ["url"],
+        },
+    },
+}
+
+SEARCH_WEB_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "search_web",
+        "description": "Search the web for information using Google.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+# =============================================================================
+# Local Automation Tools (Screen/Keyboard/Mouse)
+# =============================================================================
+
+MOUSE_MOVE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "mouse_move",
+        "description": "Move the mouse cursor to a specific (x, y) coordinate on screen.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "X coordinate."},
+                "y": {"type": "integer", "description": "Y coordinate."},
+            },
+            "required": ["x", "y"],
+        },
+    },
+}
+
+MOUSE_CLICK_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "mouse_click",
+        "description": "Click the mouse at the current position or specified coordinates.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "Optional X coordinate."},
+                "y": {"type": "integer", "description": "Optional Y coordinate."},
+                "button": {
+                    "type": "string", 
+                    "enum": ["left", "right", "middle"],
+                    "default": "left"
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+KEYBOARD_TYPE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "keyboard_type",
+        "description": "Type text on the keyboard at the current focused element.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The text to type."},
+            },
+            "required": ["text"],
+        },
+    },
+}
+
+# =============================================================================
 # Aggregated Tool Lists
 # =============================================================================
 
@@ -569,6 +694,15 @@ MEMORY_TOOLS: list[dict[str, Any]] = [
     RECALL_MEMORY_TOOL,
 ]
 
+ADA_V2_TOOLS: list[dict[str, Any]] = [
+    GENERATE_CAD_TOOL,
+    BROWSE_WEB_TOOL,
+    SEARCH_WEB_TOOL,
+    MOUSE_MOVE_TOOL,
+    MOUSE_CLICK_TOOL,
+    KEYBOARD_TYPE_TOOL,
+]
+
 ALL_TOOLS: list[dict[str, Any]] = (
     CALENDAR_TOOLS
     + EMAIL_TOOLS
@@ -577,9 +711,15 @@ ALL_TOOLS: list[dict[str, Any]] = (
     + WEATHER_TOOLS
     + SETTINGS_TOOLS
     + MEMORY_TOOLS
+    + ADA_V2_TOOLS
 )
 
 
 def get_tool_names() -> list[str]:
     """Return the names of all defined tools."""
     return [tool["function"]["name"] for tool in ALL_TOOLS]
+
+
+def get_all_tool_schemas() -> list[dict[str, Any]]:
+    """Return all defined tool schemas."""
+    return ALL_TOOLS

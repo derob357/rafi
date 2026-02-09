@@ -100,7 +100,7 @@ REMINDER_PATTERN = re.compile(
 )
 
 SNOOZE_PATTERN = re.compile(
-    r"set\s+(?:min(?:imum)?\s+)?snooze\s+(?:to\s+)?(\d+)\s*(?:minutes?|mins?|m)?",
+    r"set\s+(?:min(?:imum)?\s+)?snooze\s+(?:duration\s+)?(?:to\s+)?(\d+)\s*(?:minutes?|mins?|m)?",
     re.IGNORECASE,
 )
 

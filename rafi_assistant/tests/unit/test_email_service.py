@@ -113,7 +113,8 @@ def _mock_gmail_service(messages: List[Dict[str, Any]] | None = None):
 class TestListEmails:
     """list_emails returns formatted emails."""
 
-    def test_returns_list_of_emails(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_returns_list_of_emails(self, mock_config):
         msgs = [
             _build_gmail_message("m1", "Hello", "alice@example.com"),
             _build_gmail_message("m2", "Meeting", "bob@example.com"),
@@ -122,22 +123,24 @@ class TestListEmails:
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.list_emails()
+            result = await svc.list_emails()
 
         assert isinstance(result, list)
         assert len(result) == 2
 
-    def test_email_contains_subject(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_email_contains_subject(self, mock_config):
         msgs = [_build_gmail_message("m1", "Important Update")]
         gmail_svc = _mock_gmail_service(msgs)
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.list_emails()
+            result = await svc.list_emails()
 
         assert "Important Update" in str(result)
 
-    def test_handles_empty_inbox(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_handles_empty_inbox(self, mock_config):
         gmail_svc = _mock_gmail_service([])
         # Override to return no messages
         gmail_svc.users().messages().list.return_value.execute.return_value = {
@@ -147,7 +150,7 @@ class TestListEmails:
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.list_emails()
+            result = await svc.list_emails()
 
         assert result == [] or result is not None
 
@@ -156,32 +159,35 @@ class TestListEmails:
 class TestSearchEmails:
     """search_emails builds the correct Gmail query."""
 
-    def test_search_by_sender(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_search_by_sender(self, mock_config):
         msgs = [_build_gmail_message("m1", "From Alice", "alice@example.com")]
         gmail_svc = _mock_gmail_service(msgs)
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.search_emails("from:alice@example.com")
+            result = await svc.search_emails("from:alice@example.com")
 
         assert isinstance(result, list)
 
-    def test_search_by_subject(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_search_by_subject(self, mock_config):
         msgs = [_build_gmail_message("m1", "Invoice #123")]
         gmail_svc = _mock_gmail_service(msgs)
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.search_emails("subject:Invoice")
+            result = await svc.search_emails("subject:Invoice")
 
         assert isinstance(result, list)
 
-    def test_search_query_passed_to_api(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_search_query_passed_to_api(self, mock_config):
         gmail_svc = _mock_gmail_service([])
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            svc.search_emails("from:amazon.com after:2025/06/01")
+            await svc.search_emails("from:amazon.com after:2025/06/01")
 
         # Verify the query was passed through
         call_args = gmail_svc.users().messages().list.call_args
@@ -192,12 +198,13 @@ class TestSearchEmails:
 class TestSendEmail:
     """send_email constructs the correct MIME message."""
 
-    def test_send_email_calls_api(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_send_email_calls_api(self, mock_config):
         gmail_svc = _mock_gmail_service([])
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.send_email(
+            result = await svc.send_email(
                 to="recipient@example.com",
                 subject="Test Subject",
                 body="Test body content.",
@@ -205,12 +212,13 @@ class TestSendEmail:
 
         gmail_svc.users().messages().send.assert_called_once()
 
-    def test_send_email_returns_confirmation(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_send_email_returns_confirmation(self, mock_config):
         gmail_svc = _mock_gmail_service([])
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.send_email(
+            result = await svc.send_email(
                 to="recipient@example.com",
                 subject="Test",
                 body="Body",
@@ -223,32 +231,35 @@ class TestSendEmail:
 class TestHtmlStripping:
     """HTML is stripped from email bodies before returning."""
 
-    def test_html_body_stripped(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_html_body_stripped(self, mock_config):
         html_body = "<html><body><h1>Hello</h1><p>World</p></body></html>"
         msgs = [_build_gmail_message("m1", "HTML Email", body=html_body, html=True)]
         gmail_svc = _mock_gmail_service(msgs)
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.list_emails()
+            result = await svc.list_emails()
 
-        # The result should not contain raw HTML tags
-        result_str = str(result)
-        assert "<html>" not in result_str.lower() or "<h1>" not in result_str.lower()
+        # The body field should not contain raw HTML tags
+        assert isinstance(result, list) and len(result) > 0
+        body_str = result[0].get("body", "") if isinstance(result[0], dict) else str(result[0])
+        assert "<html>" not in body_str.lower() and "<h1>" not in body_str.lower()
 
 
 @pytest.mark.skipif(EmailService is None, reason="EmailService not yet implemented")
 class TestBodyTruncation:
     """Email body is truncated to 2000 characters per spec."""
 
-    def test_long_body_truncated(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_long_body_truncated(self, mock_config):
         long_body = "A" * 5000
         msgs = [_build_gmail_message("m1", "Long Email", body=long_body)]
         gmail_svc = _mock_gmail_service(msgs)
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.list_emails()
+            result = await svc.list_emails()
 
         # Body in the result should be at most 2000 chars
         if isinstance(result, list) and len(result) > 0:
@@ -256,14 +267,15 @@ class TestBodyTruncation:
             body_val = first.get("body", first.get("content", "")) if isinstance(first, dict) else str(first)
             assert len(str(body_val)) <= 2500  # some overhead for formatting is acceptable
 
-    def test_short_body_not_truncated(self, mock_config):
+    @pytest.mark.asyncio
+    async def test_short_body_not_truncated(self, mock_config):
         short_body = "Short email."
         msgs = [_build_gmail_message("m1", "Short", body=short_body)]
         gmail_svc = _mock_gmail_service(msgs)
 
         with patch.object(EmailService, "_get_service", return_value=gmail_svc):
             svc = EmailService(config=mock_config, db=MagicMock())
-            result = svc.list_emails()
+            result = await svc.list_emails()
 
         if isinstance(result, list) and len(result) > 0:
             assert "Short email" in str(result)

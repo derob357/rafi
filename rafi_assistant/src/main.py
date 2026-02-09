@@ -13,7 +13,10 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator
+
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, Request, Response
 
@@ -29,15 +32,25 @@ from src.services.task_service import TaskService
 from src.services.note_service import NoteService
 from src.services.weather_service import WeatherService
 from src.services.memory_service import MemoryService
+from src.services.cad_service import CadService
+from src.services.browser_service import BrowserService
+from src.services.screen_service import ScreenService
 from src.voice.twilio_handler import TwilioHandler
 from src.voice.elevenlabs_agent import ElevenLabsAgent
 from src.voice.deepgram_stt import DeepgramSTT
+from src.orchestration.service_registry import ServiceRegistry
+from src.voice.conversation_manager import ConversationManager
+from src.vision.capture import CaptureDispatcher
+from src.tools.tool_registry import ToolRegistry
 from src.scheduling.scheduler import RafiScheduler
 from src.scheduling.briefing_job import BriefingJob
 from src.scheduling.reminder_job import ReminderJob
 
 # Configure structured JSON logging
 from pythonjsonlogger.json import JsonFormatter
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BASE_DIR / ".env")
 
 log_handler = logging.StreamHandler(sys.stdout)
 log_handler.setFormatter(
@@ -101,6 +114,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     memory_service = MemoryService(db=db, llm=llm)
 
+    cad_service = CadService(db=db)
+    browser_service = BrowserService(config=_config)
+    screen_service = ScreenService(registry=None)
+
     # Initialize Deepgram STT
     deepgram_stt = DeepgramSTT(api_key=_config.deepgram.api_key)
 
@@ -134,7 +151,51 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error("Failed to create ElevenLabs agent: %s", str(e))
         logger.warning("Voice calls will not be available")
 
-    # Store services on app state for route access
+    # Initialize Service Registry
+    registry = ServiceRegistry(
+        config=_config,
+        db=db,
+        llm=llm,
+        calendar=calendar_service,
+        email=email_service,
+        tasks=task_service,
+        notes=note_service,
+        weather=weather_service,
+        memory=memory_service,
+        twilio=twilio_handler,
+        elevenlabs=elevenlabs_agent,
+        deepgram=deepgram_stt,
+        cad=cad_service,
+        browser=browser_service,
+        screen=screen_service
+    )
+
+    # Initialize ADA-parity managers
+    registry.conversation = ConversationManager(registry)
+    registry.vision = CaptureDispatcher(registry)
+    registry.tools = ToolRegistry(registry)
+
+    # Register tools for services
+    registry.tools.register_tool("create_task", task_service.create_task, "Create a task")
+    registry.tools.register_tool("list_notes", note_service.list_notes, "List notes")
+    registry.tools.register_tool("get_weather", weather_service.get_weather, "Get weather")
+    
+    # ADA v2 tools
+    registry.tools.register_tool("generate_cad", cad_service.generate_stl, "Generate a 3D model (CAD) using build123d script")
+    registry.tools.register_tool("browse_web", browser_service.browse, "Navigate to a website and extract content")
+    registry.tools.register_tool("search_web", browser_service.search, "Search the web for information")
+    
+    # Screen control tools
+    registry.tools.register_tool("mouse_move", screen_service.move_mouse, "Move mouse to x, y coordinates")
+    registry.tools.register_tool("mouse_click", screen_service.click, "Click at current or specified coordinates")
+    registry.tools.register_tool("keyboard_type", screen_service.type_text, "Type text on target computer")
+
+    # Store registry on app state for route access
+    app.state.registry = registry
+    app.state.register_listener = registry.register_listener
+    app.state.emit_event = registry.emit
+
+    # For backward compatibility with existing routes
     app.state.config = _config
     app.state.db = db
     app.state.llm = llm
@@ -147,6 +208,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.twilio = twilio_handler
     app.state.elevenlabs = elevenlabs_agent
     app.state.deepgram = deepgram_stt
+    app.state.cad = cad_service
+    app.state.browser = browser_service
 
     # Create Telegram send helper for scheduler fallback
     async def send_telegram_message(text: str) -> None:
@@ -207,6 +270,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     logger.info("Shutting down Rafi Assistant...")
+    await browser_service.shutdown()
     if _telegram_bot:
         await _telegram_bot.stop()
     if _scheduler:
