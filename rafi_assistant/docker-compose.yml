@@ -12,3 +12,21 @@ services:
     restart: unless-stopped
     environment:
       - RAFI_CONFIG_PATH=/app/config.yaml
+    networks:
+      - rafi-network
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file: .env
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - rafi-network
+    depends_on:
+      - rafi
+
+networks:
+  rafi-network:
+    driver: bridge
