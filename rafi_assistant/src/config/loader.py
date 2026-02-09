@@ -199,8 +199,41 @@ class AppConfig(BaseModel):
     settings: SettingsConfig = Field(default_factory=SettingsConfig)
 
 
+# Mapping of environment variable names to (yaml_section, yaml_key) paths.
+# When an env var is set, it overrides the corresponding YAML value.
+_ENV_OVERRIDES: dict[str, tuple[str, str]] = {
+    "TELEGRAM_BOT_TOKEN": ("telegram", "bot_token"),
+    "TWILIO_ACCOUNT_SID": ("twilio", "account_sid"),
+    "TWILIO_AUTH_TOKEN": ("twilio", "auth_token"),
+    "TWILIO_PHONE_NUMBER": ("twilio", "phone_number"),
+    "ELEVENLABS_API_KEY": ("elevenlabs", "api_key"),
+    "LLM_API_KEY": ("llm", "api_key"),
+    "GOOGLE_CLIENT_ID": ("google", "client_id"),
+    "GOOGLE_CLIENT_SECRET": ("google", "client_secret"),
+    "SUPABASE_URL": ("supabase", "url"),
+    "SUPABASE_ANON_KEY": ("supabase", "anon_key"),
+    "SUPABASE_SERVICE_ROLE_KEY": ("supabase", "service_role_key"),
+    "DEEPGRAM_API_KEY": ("deepgram", "api_key"),
+    "WEATHER_API_KEY": ("weather", "api_key"),
+}
+
+
+def _apply_env_overrides(raw_config: dict) -> dict:
+    """Override YAML config values with environment variables when set."""
+    for env_var, (section, key) in _ENV_OVERRIDES.items():
+        value = os.environ.get(env_var)
+        if value:
+            if section not in raw_config:
+                raw_config[section] = {}
+            raw_config[section][key] = value
+    return raw_config
+
+
 def load_config(config_path: Optional[str] = None) -> AppConfig:
     """Load and validate configuration from a YAML file.
+
+    Environment variables (loaded via dotenv) override YAML values when set.
+    See _ENV_OVERRIDES for the mapping.
 
     Args:
         config_path: Path to the YAML config file. If None, uses the
@@ -235,6 +268,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         raise ValueError(
             f"Configuration file must contain a YAML mapping, got: {type(raw_config).__name__}"
         )
+
+    raw_config = _apply_env_overrides(raw_config)
 
     try:
         config = AppConfig(**raw_config)

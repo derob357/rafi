@@ -1,0 +1,15 @@
+# Environment Variables
+.env
+.env.*
+!.env.template
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Data (logs, transcripts)
+data/

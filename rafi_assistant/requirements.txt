@@ -22,8 +22,8 @@ pytest-cov==7.0.0
 pytest-mock==3.15.1
 mypy==1.19.1
 python-dotenv==1.1.0
-PySide6==7.0.0
-qasync==0.28.1
+PySide6>=6.0.0
+qasync>=0.23.0
 opencv-python==4.11.0.86
 mss==10.0.0
 build123d==0.5.0

@@ -128,6 +128,30 @@ def sanitize_text(
     return result
 
 
+def sanitize_telegram_message(text: Optional[str]) -> str:
+    """Sanitize a Telegram message using the standard length limit.
+
+    Args:
+        text: The raw Telegram message text.
+
+    Returns:
+        Sanitized text truncated to MAX_TELEGRAM_MESSAGE_LENGTH.
+    """
+    return sanitize_text(text, max_length=MAX_TELEGRAM_MESSAGE_LENGTH)
+
+
+def sanitize_voice_transcript(text: Optional[str]) -> str:
+    """Sanitize a voice transcription using the extended length limit.
+
+    Args:
+        text: The raw voice transcription text.
+
+    Returns:
+        Sanitized text truncated to MAX_VOICE_TRANSCRIPTION_LENGTH.
+    """
+    return sanitize_text(text, max_length=MAX_VOICE_TRANSCRIPTION_LENGTH)
+
+
 def detect_prompt_injection(text: Optional[str]) -> bool:
     """Check if text contains known prompt injection patterns.
 

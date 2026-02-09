@@ -24,9 +24,13 @@ async def main():
         host="0.0.0.0", 
         port=8000, 
         log_level="info",
-        reload=False  # Reloading doesn't work well inside a custom loop
+        reload=False,  # Reloading doesn't work well inside a custom loop
+        loop="asyncio"
     )
     server = uvicorn.Server(config)
+    
+    # Prevent uvicorn from overwriting signal handlers (Qt needs them)
+    server.install_signal_handlers = lambda: None
     
     # We launch the server task. This will trigger the FastAPI 'lifespan' 
     # which initializes all services and the ServiceRegistry.

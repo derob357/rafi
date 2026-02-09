@@ -100,9 +100,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize LLM provider
     llm = _create_llm_provider(_config)
 
-    # Initialize services
+    # Initialize services (Google services degrade gracefully without OAuth)
     calendar_service = CalendarService(config=_config, db=db)
-    await calendar_service.initialize()
+    try:
+        await calendar_service.initialize()
+    except Exception as e:
+        logger.warning("Calendar service unavailable (OAuth not configured): %s", e)
 
     email_service = EmailService(config=_config, db=db)
 
@@ -288,6 +291,13 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+# Root endpoint
+@app.get("/")
+async def root() -> dict[str, str]:
+    """Root endpoint with basic service info."""
+    return {"service": "rafi_assistant", "status": "running"}
 
 
 # Health check endpoint
