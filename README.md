@@ -24,6 +24,12 @@ python -m pip install -r rafi_deploy/requirements.txt
 - Assistant: `cd rafi_assistant && pytest`
 - Deploy tooling: `cd rafi_deploy && pytest`
 
+### Local Testing & Development
+To run the full assistant with the Desktop UI on your local machine:
+1. `cd rafi_assistant`
+2. `cloudflared tunnel --url http://localhost:8000` (for webhooks)
+3. `python run_local.py`
+
 ## CI and QA
 All pushes and pull requests targeting `main` trigger the GitHub Actions workflow defined in `.github/workflows/ci.yml`. The workflow installs each package's dependencies and runs its `pytest` suite so that both directories are exercised on every merge.
 

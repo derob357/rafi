@@ -11,4 +11,6 @@
 - [x] Implement `BrowserService` for autonomous web research using `playwright` and wire as a callable tool.
 - [x] Integrate real-time VAD (Voice Activity Detection) for a smoother hands-free experience in `ConversationManager`.
 - [x] Implement local screen control (mouse/keyboard) tool to complement the BrowserService for native app automation.
+- [x] Create `run_local.py` to launch FastAPI backend and PySide6 UI simultaneously for local testing.
+- [ ] Implement a `cli.py` command in `rafi_deploy` to generate local tunneling config automatically.
 
