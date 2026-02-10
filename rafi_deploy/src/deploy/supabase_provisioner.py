@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
-    embedding vector(3072),
+    embedding vector(1536),
     source TEXT CHECK (source IN ('telegram_text', 'telegram_voice', 'twilio_call')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

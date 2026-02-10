@@ -80,7 +80,7 @@ class LLMConfig(BaseModel):
     model: str = Field(default="gpt-4o", description="Model identifier")
     api_key: str = Field(..., min_length=2, description="LLM API key")
     embedding_model: str = Field(
-        default="text-embedding-3-large",
+        default="text-embedding-3-small",
         description="Embedding model identifier",
     )
     max_tokens: int = Field(default=4096, gt=0, description="Max tokens for LLM response")
@@ -207,6 +207,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "TWILIO_AUTH_TOKEN": ("twilio", "auth_token"),
     "TWILIO_PHONE_NUMBER": ("twilio", "phone_number"),
     "ELEVENLABS_API_KEY": ("elevenlabs", "api_key"),
+    "ELEVENLABS_VOICE_ID": ("elevenlabs", "voice_id"),
     "LLM_API_KEY": ("llm", "api_key"),
     "GOOGLE_CLIENT_ID": ("google", "client_id"),
     "GOOGLE_CLIENT_SECRET": ("google", "client_secret"),

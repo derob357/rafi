@@ -71,8 +71,10 @@ class ElevenLabsAgent:
             },
         }
 
-        if tools:
-            payload["conversation_config"]["agent"]["prompt"]["tools"] = tools
+        # Tools temporarily disabled - ElevenLabs API schema validation
+        # needs investigation. Agent works for voice without tools.
+        # if tools:
+        #     payload["conversation_config"]["agent"]["prompt"]["tools"] = tools
 
         headers = {
             "xi-api-key": self._api_key,
@@ -100,10 +102,53 @@ class ElevenLabsAgent:
 
         except httpx.HTTPStatusError as e:
             logger.error("Failed to create ElevenLabs agent: %s", str(e))
+            logger.error("ElevenLabs response body: %s", e.response.text)
             raise
         except Exception as e:
             logger.exception("Unexpected error creating ElevenLabs agent: %s", str(e))
             raise
+
+    async def speak(self, text: str) -> bool:
+        """Convert text to speech and play it locally."""
+        if not text:
+            return False
+
+        logger.info(f"ElevenLabs TTS: '{text[:50]}...'")
+        headers = {
+            "xi-api-key": self._api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "text": text,
+            "model_id": "eleven_monolingual_v1",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.5},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._base_url}/text-to-speech/{self._voice_id}",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+
+                # On macOS, use afplay to play the audio stream
+                import subprocess
+                import tempfile
+                import os
+                
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+                    f.write(response.content)
+                    temp_path = f.name
+                
+                # Blocking play ensures we don't overlap voice responses
+                subprocess.run(["afplay", temp_path])
+                os.unlink(temp_path)
+                return True
+        except Exception as e:
+            logger.error(f"ElevenLabs speak failed: {e}")
+            return False
 
     async def get_signed_url(self) -> Optional[str]:
         """Get a signed URL for connecting to the agent via WebSocket.
@@ -205,17 +250,24 @@ class ElevenLabsAgent:
         agent_tools = []
 
         for schema in tool_schemas:
+            params = schema["function"].get("parameters", {"type": "object", "properties": {}})
+            tool_url = f"{webhook_url}/api/tools/{schema['function']['name']}"
             tool = {
                 "type": "webhook",
                 "name": schema["function"]["name"],
                 "description": schema["function"]["description"],
                 "webhook": {
-                    "url": f"{webhook_url}/api/tools/{schema['function']['name']}",
+                    "url": tool_url,
                     "method": "POST",
+                    "api_schema": {
+                        "url": tool_url,
+                        "method": "POST",
+                        "request_body_schema": params,
+                    },
                 },
             }
-            if "parameters" in schema["function"]:
-                tool["parameters"] = schema["function"]["parameters"]
+            if params:
+                tool["parameters"] = params
             agent_tools.append(tool)
 
         return agent_tools

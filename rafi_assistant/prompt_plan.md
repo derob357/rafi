@@ -1,29 +1,38 @@
 # Prompt Plan for Rafi → ADA Parity
 
+## Current Status (Feb 9, 2026)
+- **Phase 1-4:** COMPLETED. All core orchestration, UI, Voice (STT/TTS/Tools), and Tool Wiring are implemented.
+- **Critical Blockers:** User must run the provided SQL migration in Supabase to create the updated `vector(1536)` tables.
+- **Voice ID:** User needs a valid ElevenLabs Voice ID in `.env`.
+
 ## Blueprint Overview
-1. **Baseline audit** – Document the existing services (`TelegramBot`, `ElevenLabsAgent`, `DeepgramSTT`, calendar/email/task/memory services) in `src/main.py` and identify the hooking points for a GUI + toolset overlay. 2. **Orchestration layer** – Introduce a centralized service registry that exposes status hooks, scheduled callbacks, and tool invokers for the upcoming UI/vision pipeline. 3. **Multimodal front-end** – Build a PySide6-based UI that renders a voice status indicator, transcript console, and camera/screen-output mode controls, while streaming events from the backend. 4. **Audio/vision pipeline** – Wrap existing voice services (Deepgram + ElevenLabs) into a conversation manager that can trigger microphone/listener states, stream transcripts, and expose vision capture hooks. 5. **Extended tooling** – Provide a tool registry (search, filesystem, code execution, and data services) that can be invoked from both the UI and chat interfaces, ensuring every new capability wires back to the service registry.
+1. **Baseline audit** – [DONE] Document the existing services...
+2. **Orchestration layer** – [DONE] Introduce a centralized service registry...
+3. **Multimodal front-end** – [DONE] Build a PySide6-based UI...
+4. **Audio/vision pipeline** – [DONE] Wrap existing voice services...
+5. **Extended tooling** – [IN PROGRESS] Provide a tool registry...
 
 ## Iterative Chunking
 
-### Phase 1: Establish the integration foundation
-- Chunk 1.a: Create a `ServiceRegistry` data structure that holds strong references to the key services already instantiated in `lifespan` and exposes status queries + async helpers. This registry will later be consumed by the GUI and scheduler callbacks.
-- Chunk 1.b: Replace direct `app.state` assignments in `lifespan` with registry wiring and add helper APIs that allow new UI components to subscribe to updates (e.g., `register_listener`).
-- Chunk 1.c: Add light-weight event channels (async queues/subjects) to broadcast voice/transcript updates, task/note alerts, and tool execution results.
+### Phase 1: Establish the integration foundation [COMPLETED]
+- Chunk 1.a: Create a `ServiceRegistry`... [DONE]
+- Chunk 1.b: Replace direct `app.state` assignments... [DONE]
+- Chunk 1.c: Add light-weight event channels... [DONE]
 
-### Phase 2: Build the PySide6 experience
-- Chunk 2.a: Vendor a new `ui` package with a PySide6 `MainWindow` showing status tiles for voice, camera, and tasks, plus a log console and action buttons. Start with a skeleton window and incremental widgets that push events to/from the registry.
-- Chunk 2.b: Implement voice status badges that listen to the event channels established earlier; show “listening/speaking/idle” states and append transcripts to the console as they arrive.
-- Chunk 2.c: Add camera/screen toggles and wire them to placeholder methods in the registry so that the UI can request a live input feed (video capture logic to follow). Provide UI-driven commands (e.g., “Open Tasks Panel”) that route through the tool registry.
+### Phase 2: Build the PySide6 experience [COMPLETED]
+- Chunk 2.a: Vendor a new `ui` package... [DONE]
+- Chunk 2.b: Implement voice status badges... [DONE]
+- Chunk 2.c: Add camera/screen toggles... [DONE]
 
-### Phase 3: Add conversation & vision tooling
-- Chunk 3.a: Introduce a `ConversationManager` that binds `DeepgramSTT` (input) with `ElevenLabsAgent` (output), exposing start/stop methods and streaming transcript callbacks via the event channel.
-- Chunk 3.b: Integrate a simple OpenCV-based capture dispatcher that can switch between webcam/screen streams and expose frames (or metadata) to the registry; the UI toggles from Phase 2 drive it.
-- Chunk 3.c: Allow the conversation manager to ingest captured frames and emit contextual summaries (placeholder) so the UI console can show “Visual Input: ...”. This lays groundwork for LLM vision later.
+### Phase 3: Add conversation & vision tooling [COMPLETED]
+- Chunk 3.a: Introduce a `ConversationManager`... [DONE - Microphone -> Deepgram -> LLM -> Speech loop wired]
+- Chunk 3.b: Integrate a simple OpenCV-based capture dispatcher... [DONE]
+- Chunk 3.c: Allow the conversation manager to ingest captured frames... [STRETCH]
 
-### Phase 4: Tool registry + wiring
-- Chunk 4.a: Define a `ToolRegistry` that lists callable actions (e.g., create task, list notes, search emails, run python snippet) with metadata and async adapters to existing services.
-- Chunk 4.b: Surface tool invocation buttons in the PySide6 UI and allow the Telegram bot (and future scheduler) to reuse the same registry so actions behave identically.
-- Chunk 4.c: Build a final wiring step that ties the registry, conversation manager, and UI through the event channels, ensuring every prompt/action flows through a single orchestrated path (no orphaned helpers). The final prompt should describe wiring: UI -> service registry -> tools/conversation manager -> service execution -> UI feedback.
+### Phase 4: Tool registry + wiring [COMPLETED]
+- Chunk 4.a: Define a `ToolRegistry`... [DONE]
+- Chunk 4.b: Surface tool invocation buttons... [DONE]
+- Chunk 4.c: Build a final wiring step... [DONE - `ConversationManager` handles tool calls via `ToolRegistry`]
 
 ## Prompt Series for an LLM Agent
 

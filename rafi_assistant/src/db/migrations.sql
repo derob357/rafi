@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
-    embedding vector(3072),
+    embedding vector(1536),
     source TEXT NOT NULL DEFAULT 'telegram_text'
         CHECK (source IN ('telegram_text', 'telegram_voice', 'twilio_call', 'system')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -32,8 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_content_fts
 
 -- HNSW index for fast cosine similarity search on embeddings
 CREATE INDEX IF NOT EXISTS idx_messages_embedding
-    ON messages USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    ON messages USING hnsw (embedding vector_cosine_ops);
 
 -- =============================================================================
 -- Table: tasks
@@ -139,7 +138,7 @@ CREATE INDEX IF NOT EXISTS idx_events_cache_reminded ON events_cache (reminded);
 -- Used by the memory service for semantic recall.
 -- =============================================================================
 CREATE OR REPLACE FUNCTION match_messages(
-    query_embedding vector(3072),
+    query_embedding vector(1536),
     match_count INT DEFAULT 5,
     match_threshold FLOAT DEFAULT 0.7
 )
@@ -175,7 +174,7 @@ $$;
 -- Combines cosine similarity with full-text search for hybrid retrieval.
 -- =============================================================================
 CREATE OR REPLACE FUNCTION hybrid_search_messages(
-    query_embedding vector(3072),
+    query_embedding vector(1536),
     query_text TEXT,
     match_count INT DEFAULT 5,
     match_threshold FLOAT DEFAULT 0.5

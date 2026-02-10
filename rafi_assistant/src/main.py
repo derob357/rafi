@@ -180,8 +180,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Register tools for services
     registry.tools.register_tool("create_task", task_service.create_task, "Create a task")
+    registry.tools.register_tool("list_tasks", task_service.list_tasks, "List all tasks")
+    registry.tools.register_tool("update_task", task_service.update_task, "Update a task")
+    registry.tools.register_tool("delete_task", task_service.delete_task, "Delete a task")
+    registry.tools.register_tool("complete_task", task_service.complete_task, "Mark a task as completed")
+    
     registry.tools.register_tool("list_notes", note_service.list_notes, "List notes")
+    registry.tools.register_tool("create_note", note_service.create_note, "Create a new note")
+    registry.tools.register_tool("get_note", note_service.get_note, "Get a specific note")
+    registry.tools.register_tool("update_note", note_service.update_note, "Update a note")
+    registry.tools.register_tool("delete_note", note_service.delete_note, "Delete a note")
+    
     registry.tools.register_tool("get_weather", weather_service.get_weather, "Get weather")
+    
+    # Calendar & Email Tools
+    registry.tools.register_tool("read_calendar", calendar_service.list_events, "List upcoming calendar events")
+    registry.tools.register_tool("create_event", calendar_service.create_event, "Create a new calendar event")
+    registry.tools.register_tool("update_event", calendar_service.update_event, "Update a calendar event")
+    registry.tools.register_tool("delete_event", calendar_service.delete_event, "Delete a calendar event")
+    
+    registry.tools.register_tool("read_emails", email_service.list_emails, "Read recent emails")
+    registry.tools.register_tool("search_emails", email_service.search_emails, "Search emails")
+    registry.tools.register_tool("send_email", email_service.send_email, "Send a new email")
+    
+    # Memory tool
+    registry.tools.register_tool("recall_memory", memory_service.search_memory, "Search conversation history")
     
     # ADA v2 tools
     registry.tools.register_tool("generate_cad", cad_service.generate_stl, "Generate a 3D model (CAD) using build123d script")
