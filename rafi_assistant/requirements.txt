@@ -24,8 +24,12 @@ mypy==1.19.1
 python-dotenv==1.1.0
 PySide6>=6.0.0
 qasync>=0.23.0
-# opencv-python
+sounddevice>=0.4.6
+soundfile>=0.12.1
+pyautogui>=0.9.54
+numpy>=1.24.0
+opencv-python>=4.8.0
 mss==10.0.0
-# build123d
-# playwright
+playwright>=1.40.0
+build123d>=0.3.0
 # pytest-playwright

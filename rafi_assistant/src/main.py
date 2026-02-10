@@ -215,39 +215,76 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     registry.vision = CaptureDispatcher(registry)
     registry.tools = ToolRegistry(registry)
 
+    # -- Adapter wrappers for services whose update methods expect (id, updates_dict)
+    #    but the LLM sends individual kwargs like (task_id=..., title=..., status=...).
+    async def _update_task_adapter(task_id: str, **kwargs: Any) -> Any:
+        return await task_service.update_task(task_id, kwargs)
+
+    async def _update_note_adapter(note_id: str, **kwargs: Any) -> Any:
+        return await note_service.update_note(note_id, kwargs)
+
+    async def _update_event_adapter(event_id: str, **kwargs: Any) -> Any:
+        return await calendar_service.update_event(event_id, kwargs)
+
     # Register tools for services
     registry.tools.register_tool("create_task", task_service.create_task, "Create a task")
     registry.tools.register_tool("list_tasks", task_service.list_tasks, "List all tasks")
-    registry.tools.register_tool("update_task", task_service.update_task, "Update a task")
+    registry.tools.register_tool("update_task", _update_task_adapter, "Update a task")
     registry.tools.register_tool("delete_task", task_service.delete_task, "Delete a task")
     registry.tools.register_tool("complete_task", task_service.complete_task, "Mark a task as completed")
-    
+
     registry.tools.register_tool("list_notes", note_service.list_notes, "List notes")
     registry.tools.register_tool("create_note", note_service.create_note, "Create a new note")
     registry.tools.register_tool("get_note", note_service.get_note, "Get a specific note")
-    registry.tools.register_tool("update_note", note_service.update_note, "Update a note")
+    registry.tools.register_tool("update_note", _update_note_adapter, "Update a note")
     registry.tools.register_tool("delete_note", note_service.delete_note, "Delete a note")
-    
+
     registry.tools.register_tool("get_weather", weather_service.get_weather, "Get weather")
-    
+
     # Calendar & Email Tools
     registry.tools.register_tool("read_calendar", calendar_service.list_events, "List upcoming calendar events")
     registry.tools.register_tool("create_event", calendar_service.create_event, "Create a new calendar event")
-    registry.tools.register_tool("update_event", calendar_service.update_event, "Update a calendar event")
+    registry.tools.register_tool("update_event", _update_event_adapter, "Update a calendar event")
     registry.tools.register_tool("delete_event", calendar_service.delete_event, "Delete a calendar event")
-    
+
     registry.tools.register_tool("read_emails", email_service.list_emails, "Read recent emails")
     registry.tools.register_tool("search_emails", email_service.search_emails, "Search emails")
     registry.tools.register_tool("send_email", email_service.send_email, "Send a new email")
-    
+
     # Memory tool
     registry.tools.register_tool("recall_memory", memory_service.search_memory, "Search conversation history")
-    
+
+    # Settings tools
+    async def _update_setting(key: str, value: str) -> dict[str, str]:
+        """Update a runtime setting. Only modifies in-memory config for this session."""
+        allowed = {
+            "morning_briefing_time", "quiet_hours_start", "quiet_hours_end",
+            "reminder_lead_minutes", "min_snooze_minutes",
+        }
+        if key not in allowed:
+            return {"error": f"Unknown setting: {key}. Allowed: {', '.join(sorted(allowed))}"}
+        current = getattr(_config.settings, key, None)
+        try:
+            if key in ("reminder_lead_minutes", "min_snooze_minutes"):
+                setattr(_config.settings, key, int(value))
+            else:
+                setattr(_config.settings, key, value)
+        except Exception as e:
+            return {"error": str(e)}
+        return {"setting": key, "old_value": str(current), "new_value": value}
+
+    async def _get_settings() -> dict[str, Any]:
+        """Return current runtime settings."""
+        return _config.settings.model_dump() if _config else {}
+
+    registry.tools.register_tool("update_setting", _update_setting, "Update a user setting")
+    registry.tools.register_tool("get_settings", _get_settings, "Get current settings")
+
     # ADA v2 tools
     registry.tools.register_tool("generate_cad", cad_service.generate_stl, "Generate a 3D model (CAD) using build123d script")
     registry.tools.register_tool("browse_web", browser_service.browse, "Navigate to a website and extract content")
     registry.tools.register_tool("search_web", browser_service.search, "Search the web for information")
-    
+
     # Screen control tools
     registry.tools.register_tool("mouse_move", screen_service.move_mouse, "Move mouse to x, y coordinates")
     registry.tools.register_tool("mouse_click", screen_service.click, "Click at current or specified coordinates")

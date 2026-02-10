@@ -25,6 +25,8 @@ class ConversationManager:
         self._is_speaking = False
         self._current_speech_text = None
         self._last_barge_in_time = 0
+        self._last_speech_end_time = 0  # To handle post-speech cooldown
+        self._speech_history = []        # To track recent responses for echo detection
         self._dg_client = None
         self._dg_connection = None
         self._audio_stream = None
@@ -60,10 +62,17 @@ class ConversationManager:
                     return
                     
                 sentence = message.channel.alternatives[0].transcript
-                if not sentence:
+                if not sentence or not sentence.strip():
                     return
                 
                 is_final = message.is_final
+                now = asyncio.get_event_loop().time()
+
+                # COOLDOWN: Reject transcripts that arrive just after we stop speaking
+                # (prevents lingering background audio from being processed)
+                if not self._is_speaking and (now - self._last_speech_end_time < 1.0):
+                    logger.debug(f"Ignoring post-speech cooldown transcript: '{sentence}'")
+                    return
 
                 # BARGE-IN: If assistant is speaking and we detect non-empty transcript, stop playback immediately
                 if self._is_speaking:
@@ -71,14 +80,14 @@ class ConversationManager:
                     if len(sentence.split()) < 3:
                         return
                     
-                    # Ignore if the transcript is a subset of what we are currently saying
-                    # (preventing Rafi from interrupting himself due to speaker echo)
-                    if self._current_speech_text and sentence.lower() in self._current_speech_text.lower():
+                    # FUZZY ECHO DETECTION: Check if the user is just "saying" what Rafi is currently saying
+                    combined_history = " ".join(self._speech_history[-2:]) + " " + (self._current_speech_text or "")
+                    if sentence.lower() in combined_history.lower():
                         logger.debug(f"Ignoring self-echo during playback: {sentence}")
                         return
 
                     logger.info(f"Barge-in detected: interrupting playback for: '{sentence}'")
-                    self._last_barge_in_time = asyncio.get_event_loop().time()
+                    self._last_barge_in_time = now
                     await self.stop_speaking()
 
                 # Broadcast the transcript to the UI
@@ -103,6 +112,11 @@ class ConversationManager:
             def audio_callback(indata, frames, time, status):
                 if status:
                     logger.warning(f"Audio stream status: {status}")
+                
+                # MUTE during TTS to prevent feedback loops
+                if self._is_speaking:
+                    return
+
                 if self._dg_connection:
                     # Send bytes to Deepgram - converting CFFI buffer to bytes
                     asyncio.run_coroutine_threadsafe(
@@ -169,13 +183,9 @@ class ConversationManager:
 
         logger.info("Processing text input: %s", text)
 
-        # Store user message - using desktop_text for DB constraint compatibility
+        # Store user message in memory
         if self.registry.memory:
-            try:
-                await self.registry.memory.store_message(role="user", content=text, source="desktop_text")
-            except Exception as e:
-                logger.warning(f"Failed to store message with source desktop_text: {e}. Retrying with source system.")
-                await self.registry.memory.store_message(role="user", content=text, source="system")
+            await self.registry.memory.store_message(role="user", content=text, source="desktop_text")
 
         try:
             response_dict = await self.registry.llm.chat(
@@ -208,12 +218,9 @@ class ConversationManager:
                     response = followup.get("content")
 
             if response:
+                # Store assistant response in memory
                 if self.registry.memory:
-                    try:
-                        await self.registry.memory.store_message(role="assistant", content=response, source="desktop_text")
-                    except Exception as e:
-                        logger.warning(f"Failed to store message with source desktop_text: {e}. Retrying with source system.")
-                        await self.registry.memory.store_message(role="assistant", content=response, source="system")
+                    await self.registry.memory.store_message(role="assistant", content=response, source="desktop_text")
                 # Broadcast with role so UI shows it as RAFI
                 await self.registry.transcript_queue.put({"text": response, "role": "assistant", "is_final": True})
             else:
@@ -228,22 +235,31 @@ class ConversationManager:
         if self._is_speaking or not text.strip():
             return
 
+        # MINIMUM WORD COUNT: Filter out fragments logic
+        words = text.split()
+        if len(words) < 2:
+            logger.debug(f"Ignoring single-word transcript fragment: '{text}'")
+            return
+
         # ECHO PROTECTION: If we just barged in, check if this transcript is actually the assistant's echo
         now = asyncio.get_event_loop().time()
+        
+        # Check against recent speech history
+        combined_history = " ".join(self._speech_history[-2:]) + " " + (self._current_speech_text or "")
+        if text.lower() in combined_history.lower():
+            logger.info(f"Ignoring echo transcript: '{text}'")
+            return
+
         if now - self._last_barge_in_time < 2.0:
-            if self._current_speech_text and text.lower() in self._current_speech_text.lower():
+            if text.lower() in combined_history.lower():
                 logger.info(f"Ignoring echo transcript after barge-in: '{text}'")
                 return
 
         logger.info(f"Processing voice input: {text}")
         
-        # Store user message in memory - using desktop_voice for compatibility
+        # Store user message in memory
         if self.registry.memory:
-            try:
-                await self.registry.memory.store_message(role="user", content=text, source="desktop_voice")
-            except Exception as e:
-                logger.warning(f"Failed to store message with source desktop_voice: {e}. Retrying with source system.")
-                await self.registry.memory.store_message(role="user", content=text, source="system")
+            await self.registry.memory.store_message(role="user", content=text, source="desktop_voice")
 
         try:
             # Inform the LLM about the voice context
@@ -296,11 +312,7 @@ class ConversationManager:
             if response:
                 # Store assistant response in memory
                 if self.registry.memory:
-                    try:
-                        await self.registry.memory.store_message(role="assistant", content=response, source="desktop_voice")
-                    except Exception as e:
-                        logger.warning(f"Failed to store message with source desktop_voice: {e}. Retrying with source system.")
-                        await self.registry.memory.store_message(role="assistant", content=response, source="system")
+                    await self.registry.memory.store_message(role="assistant", content=response, source="desktop_voice")
                 
                 await self.registry.broadcast_transcript(response, is_final=True)
                 await self.speak(response)
@@ -328,5 +340,10 @@ class ConversationManager:
             await asyncio.sleep(len(text) * 0.05)
         finally:
             self._is_speaking = False
+            self._last_speech_end_time = asyncio.get_event_loop().time()
+            self._speech_history.append(text)
+            if len(self._speech_history) > 5:
+                self._speech_history.pop(0)
+            self._current_speech_text = None
             await self.registry.emit("voice", status="idle")
 

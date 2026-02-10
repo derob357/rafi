@@ -171,7 +171,6 @@ class ElevenLabsAgent:
         except Exception as e:
             logger.error(f"ElevenLabs speak failed: {e}")
             return False
-            return False
 
     async def get_signed_url(self) -> Optional[str]:
         """Get a signed URL for connecting to the agent via WebSocket.
