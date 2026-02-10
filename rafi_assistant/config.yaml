@@ -7,7 +7,7 @@ client:
 
 telegram:
   bot_token: "YOUR_TELEGRAM_BOT_TOKEN"  # Get from @BotFather
-  user_id: 123456789                     # Get from @userinfobot
+  user_id: 6408500952                     # Get from @userinfobot
 
 twilio:
   account_sid: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"

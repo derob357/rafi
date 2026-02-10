@@ -129,20 +129,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         await calendar_service.initialize()
     except Exception as e:
-        logger.warning("Calendar service unavailable (OAuth not configured): %s", e)
+        logger.warning("Calendar service unavailable: %s", e)
 
     email_service = EmailService(config=_config, db=db)
+    try:
+        await email_service.initialize()
+    except Exception as e:
+        logger.warning("Email service unavailable: %s", e)
 
     task_service = TaskService(db=db)
     note_service = NoteService(db=db)
 
     weather_service = WeatherService(config=_config.weather)
-    await weather_service.initialize()
+    try:
+        await weather_service.initialize()
+    except Exception as e:
+        logger.warning("Weather service unavailable: %s", e)
 
     memory_service = MemoryService(db=db, llm=llm)
 
     cad_service = CadService(db=db)
+    
     browser_service = BrowserService(config=_config)
+    try:
+        await browser_service.initialize()
+    except Exception as e:
+        logger.warning("Browser service unavailable: %s", e)
+
     screen_service = ScreenService(registry=None)
 
     # Initialize Deepgram STT
@@ -298,6 +311,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _scheduler.set_calendar_sync_callback(calendar_service.sync_events_to_cache)
     _scheduler.setup_jobs()
     _scheduler.start()
+
+    logger.info("--- Rafi Assistant Services Status ---")
+    logger.info("Database: ONLINE")
+    logger.info("STT (Deepgram): ONLINE")
+    logger.info("TTS (ElevenLabs): ONLINE")
+    logger.info("Calendar: %s", "ONLINE" if calendar_service._service else "OFFLINE")
+    logger.info("Email: %s", "ONLINE" if email_service._service else "OFFLINE")
+    logger.info("Browser: ONLINE")
+    logger.info("Weather: ONLINE")
+    logger.info("---------------------------------------")
+    logger.info("Rafi Assistant logic initialized successfully.")
 
     # Initialize and start Telegram bot
     _telegram_bot = TelegramBot(

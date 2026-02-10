@@ -59,20 +59,38 @@ class EmailService:
             )
         )
 
-        if not tokens:
-            raise RuntimeError("Google OAuth tokens not found for Gmail.")
+        access_token = ""
+        refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
 
-        token_row = tokens[0]
-        access_token = token_row.get("access_token", "")
-        refresh_token = token_row.get("refresh_token", "")
+        if tokens:
+            token_row = tokens[0]
+            access_token = token_row.get("access_token", "")
+            refresh_token = token_row.get("refresh_token", "") or refresh_token
 
-        if self._fernet:
-            try:
-                access_token = self._fernet.decrypt(access_token.encode()).decode()
-                refresh_token = self._fernet.decrypt(refresh_token.encode()).decode()
-            except Exception as e:
-                logger.error("Failed to decrypt OAuth tokens: %s", e)
-                raise RuntimeError("OAuth token decryption failed") from e
+            if self._fernet:
+                try:
+                    access_token = self._fernet.decrypt(access_token.encode()).decode()
+                    refresh_token = self._fernet.decrypt(refresh_token.encode()).decode()
+                except Exception as e:
+                    logger.error("Failed to decrypt OAuth tokens: %s", e)
+                    raise RuntimeError("OAuth token decryption failed") from e
+
+        if not refresh_token:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            flow = InstalledAppFlow.from_client_config(
+                {
+                    "installed": {
+                        "client_id": self._config.google.client_id,
+                        "client_secret": self._config.google.client_secret,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                },
+                SCOPES,
+            )
+            auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+            logger.warning("\n" + "!"*80 + f"\nGMAIL ACTION REQUIRED:\nVisit this URL to authorize Gmail access for Rafi:\n{auth_url}\n" + "!"*80 + "\n")
+            raise RuntimeError("Google OAuth tokens not found for Gmail. Set GOOGLE_REFRESH_TOKEN in .env or visit the URL above.")
 
         self._credentials = Credentials(
             token=access_token,

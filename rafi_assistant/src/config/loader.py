@@ -206,6 +206,7 @@ class AppConfig(BaseModel):
 # When an env var is set, it overrides the corresponding YAML value.
 _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "TELEGRAM_BOT_TOKEN": ("telegram", "bot_token"),
+    "TELEGRAM_USER_ID": ("telegram", "user_id"),
     "TWILIO_ACCOUNT_SID": ("twilio", "account_sid"),
     "TWILIO_AUTH_TOKEN": ("twilio", "auth_token"),
     "TWILIO_PHONE_NUMBER": ("twilio", "phone_number"),

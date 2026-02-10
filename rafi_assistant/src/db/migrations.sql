@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     embedding vector(1536),
     source TEXT NOT NULL DEFAULT 'telegram_text'
-        CHECK (source IN ('telegram_text', 'telegram_voice', 'twilio_call', 'system')),
+        CHECK (source IN ('telegram_text', 'telegram_voice', 'twilio_call', 'desktop_text', 'desktop_voice', 'system')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

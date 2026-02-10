@@ -64,23 +64,47 @@ class CalendarService:
             )
         )
 
-        if not tokens:
-            raise RuntimeError(
-                "Google OAuth tokens not found. Client must complete OAuth flow."
+        access_token = ""
+        refresh_token = os.environ.get("GOOGLE_REFRESH_TOKEN", "")
+
+        if tokens:
+            token_row = tokens[0]
+            access_token = token_row.get("access_token", "")
+            refresh_token = token_row.get("refresh_token", "") or refresh_token
+
+            # Decrypt tokens if encryption is configured
+            if self._fernet:
+                try:
+                    access_token = self._fernet.decrypt(access_token.encode()).decode()
+                    refresh_token = self._fernet.decrypt(refresh_token.encode()).decode()
+                except Exception as e:
+                    logger.error("Failed to decrypt OAuth tokens: %s", e)
+                    raise RuntimeError("OAuth token decryption failed") from e
+        
+        if not refresh_token:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            flow = InstalledAppFlow.from_client_config(
+                {
+                    "installed": {
+                        "client_id": self._config.google.client_id,
+                        "client_secret": self._config.google.client_secret,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                },
+                SCOPES,
             )
-
-        token_row = tokens[0]
-        access_token = token_row.get("access_token", "")
-        refresh_token = token_row.get("refresh_token", "")
-
-        # Decrypt tokens if encryption is configured
-        if self._fernet:
-            try:
-                access_token = self._fernet.decrypt(access_token.encode()).decode()
-                refresh_token = self._fernet.decrypt(refresh_token.encode()).decode()
-            except Exception as e:
-                logger.error("Failed to decrypt OAuth tokens: %s", e)
-                raise RuntimeError("OAuth token decryption failed") from e
+            auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+            print("\n" + "!"*80)
+            print("GOOGLE CALENDAR ACTION REQUIRED:")
+            print(f"Visit this URL to authorize Rafi:\n\n{auth_url}\n")
+            print("After authorizing, paste the 'refresh_token' into your .env as GOOGLE_REFRESH_TOKEN.")
+            print("!"*80 + "\n")
+            
+            logger.warning("Google Authorization URL generated: %s", auth_url)
+            raise RuntimeError(
+                "Google OAuth tokens not found. Set GOOGLE_REFRESH_TOKEN in .env or visit the URL above."
+            )
 
         self._credentials = Credentials(
             token=access_token,

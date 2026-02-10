@@ -36,10 +36,22 @@ class ElevenLabsAgent:
         self._llm_model = llm_model
         self._base_url = "https://api.elevenlabs.io/v1"
         self._agent_id: Optional[str] = None
+        self._playback_process: Optional[asyncio.subprocess.Process] = None
 
     @property
     def agent_id(self) -> Optional[str]:
         return self._agent_id
+
+    async def stop(self) -> None:
+        """Stop any ongoing audio playback."""
+        if self._playback_process:
+            try:
+                self._playback_process.terminate()
+                logger.info("ElevenLabs playback stopped")
+            except Exception as e:
+                logger.error(f"Failed to stop ElevenLabs playback: {e}")
+            finally:
+                self._playback_process = None
 
     async def create_agent(self, webhook_url: str) -> str:
         """Create or update the ElevenLabs conversational agent.
@@ -134,7 +146,7 @@ class ElevenLabsAgent:
                 response.raise_for_status()
 
                 # On macOS, use afplay to play the audio stream
-                import subprocess
+                import asyncio
                 import tempfile
                 import os
                 
@@ -142,12 +154,23 @@ class ElevenLabsAgent:
                     f.write(response.content)
                     temp_path = f.name
                 
-                # Blocking play ensures we don't overlap voice responses
-                subprocess.run(["afplay", temp_path])
-                os.unlink(temp_path)
+                try:
+                    # Run afplay as a subprocess that we can terminate
+                    self._playback_process = await asyncio.create_subprocess_exec(
+                        "afplay", temp_path,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL
+                    )
+                    await self._playback_process.wait()
+                finally:
+                    self._playback_process = None
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                
                 return True
         except Exception as e:
             logger.error(f"ElevenLabs speak failed: {e}")
+            return False
             return False
 
     async def get_signed_url(self) -> Optional[str]:

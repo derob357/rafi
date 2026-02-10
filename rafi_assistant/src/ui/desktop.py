@@ -368,14 +368,25 @@ class MainWindow(QMainWindow):
     def append_to_console(self, text):
         self.console.append(text)
 
-    def _on_input_submit(self):
+    @asyncSlot()
+    async def _on_input_submit(self):
         text = self.input_field.text().strip()
-        if text:
+        if not text:
+            return
+
+        self.console.append(
+            f'<span style="color:{ACCENT_BRIGHT};">&gt; USER:</span> {text}'
+        )
+        self.input_field.clear()
+        self._log_activity(f'Command: <span style="color:#a0a0ff;">{text}</span>')
+
+        # Process through LLM via ConversationManager
+        if self.registry.conversation:
+            await self.registry.conversation.process_text_input(text)
+        else:
             self.console.append(
-                f'<span style="color:{ACCENT_BRIGHT};">&gt; USER:</span> {text}'
+                f'<span style="color:#ff4444;">ConversationManager not available</span>'
             )
-            self.input_field.clear()
-            self._log_activity(f'Command: <span style="color:#a0a0ff;">{text}</span>')
 
     # ── button handlers ─────────────────────────────────────────────────
     @asyncSlot()

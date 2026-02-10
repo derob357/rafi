@@ -100,7 +100,18 @@ class SupabaseClient:
 
             if filters:
                 for key, value in filters.items():
-                    query = query.eq(key, value)
+                    if key.endswith("__gte"):
+                        query = query.gte(key[:-5], value)
+                    elif key.endswith("__lte"):
+                        query = query.lte(key[:-5], value)
+                    elif key.endswith("__gt"):
+                        query = query.gt(key[:-4], value)
+                    elif key.endswith("__lt"):
+                        query = query.lt(key[:-4], value)
+                    elif key.endswith("__neq"):
+                        query = query.neq(key[:-5], value)
+                    else:
+                        query = query.eq(key, value)
 
             if order_by:
                 query = query.order(order_by, desc=order_desc)
