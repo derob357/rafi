@@ -15,7 +15,7 @@ Full spec: `RAFI_SPEC.md`
 ## Architecture
 
 Each client runs a Docker container on a shared EC2 t3.micro. Communication flows:
-- **Telegram text/voice** → python-telegram-bot → OpenAI LLM → response
+- **Telegram text/voice** → python-telegram-bot → LLM (OpenAI/Anthropic/Groq/Gemini, runtime switchable) → response
 - **Voice calls** → Twilio → ElevenLabs Conversational AI (STT+LLM+TTS) → tools → transcript to Supabase
 - **Async transcription** (Telegram voice messages) → Deepgram
 - **Proactive calls** → APScheduler → Twilio outbound (respects quiet hours, falls back to Telegram)
@@ -73,7 +73,7 @@ pytest tests/ -v
 - **Config validation**: All config loaded through pydantic models in `src/config/loader.py`. App refuses to start on invalid config.
 - **Input sanitization**: All external text goes through `src/security/sanitizer.py` before reaching LLM or database. This includes Telegram messages, voice transcriptions, and config values.
 - **Null safety**: Use `safe_get()` and `safe_list_get()` from `src/security/validators.py` for all external data access.
-- **LLM provider abstraction**: `src/llm/provider.py` defines the interface. OpenAI is default, Anthropic is available. Configurable per client.
+- **LLM provider abstraction**: `src/llm/provider.py` defines the interface. `LLMManager` in `src/llm/llm_manager.py` orchestrates multiple providers (OpenAI, Anthropic, Groq, Gemini) with runtime switching via Telegram `/provider` command and automatic failover. Embeddings always route to OpenAI.
 - **Error handling**: Every external API call has retry logic with exponential backoff. Failed voice calls fall back to Telegram text. See Error Handling Strategies in RAFI_SPEC.md.
 - **Quiet hours**: All outbound call logic checks quiet hours immediately before dialing, not just at schedule time.
 

@@ -109,10 +109,13 @@ class AnthropicProvider(LLMProvider):
     via the OPENAI_API_KEY environment variable or the llm config.
     """
 
-    def __init__(self, config: LLMConfig, openai_api_key: Optional[str] = None) -> None:
+    ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+
+    def __init__(self, config: LLMConfig, openai_api_key: Optional[str] = None, api_key: Optional[str] = None, model: Optional[str] = None) -> None:
         self._config = config
-        self._client = anthropic.AsyncAnthropic(api_key=config.api_key)
-        self._model = config.model
+        key = api_key or config.api_key
+        self._client = anthropic.AsyncAnthropic(api_key=key)
+        self._model = model or (config.model if config.provider == "anthropic" else self.ANTHROPIC_DEFAULT_MODEL)
         self._default_temperature = config.temperature
         self._default_max_tokens = config.max_tokens
         self._embedding_model = config.embedding_model

@@ -26,6 +26,7 @@ from src.bot.command_parser import SettingsUpdate, apply_settings_update, parse_
 from src.config.loader import AppConfig
 from src.db.supabase_client import SupabaseClient
 from src.llm.provider import LLMProvider
+from src.llm.llm_manager import LLMManager
 from src.llm.tool_definitions import ALL_TOOLS
 from src.security.auth import verify_telegram_user
 from src.security.sanitizer import (
@@ -61,10 +62,12 @@ class TelegramBot:
         notes: NoteService,
         weather: WeatherService,
         deepgram_stt: DeepgramSTT,
+        llm_manager: Optional[LLMManager] = None,
     ) -> None:
         self._config = config
         self._db = db
         self._llm = llm
+        self._llm_manager = llm_manager
         self._memory = memory
         self._calendar = calendar
         self._email = email
@@ -560,7 +563,13 @@ class TelegramBot:
             '  "set quiet hours 10pm to 7am"\n'
             '  "set briefing time 8am"\n'
             '  "set reminder 15 minutes"\n'
-            '  "set snooze 5 minutes"'
+            '  "set snooze 5 minutes"\n\n'
+            "AI Provider:\n"
+            "  /provider - Show current AI provider\n"
+            "  /provider openai - Switch to OpenAI GPT-4o\n"
+            "  /provider claude - Switch to Anthropic Claude\n"
+            "  /provider groq - Switch to Groq (Llama)\n"
+            "  /provider gemini - Switch to Google Gemini"
         )
 
     async def _handle_settings(
@@ -602,6 +611,45 @@ class TelegramBot:
             f'  "set quiet hours 11pm to 6am"'
         )
 
+    async def _handle_provider(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        """Handle the /provider command for runtime LLM switching."""
+        if not verify_telegram_user(update, self._config):
+            return
+
+        if update.message is None:
+            return
+
+        if self._llm_manager is None:
+            await update.message.reply_text("Provider switching is not available.")
+            return
+
+        args = context.args
+        if not args:
+            # Show current provider and available list
+            active = self._llm_manager.active_name
+            available = self._llm_manager.available
+            lines = []
+            for p in available:
+                marker = " (active)" if p == active else ""
+                lines.append(f"  - {p}{marker}")
+            await update.message.reply_text(
+                f"Current provider: {active}\n\n"
+                f"Available providers:\n" + "\n".join(lines) + "\n\n"
+                f"Switch with: /provider <name>"
+            )
+            return
+
+        requested = args[0].lower()
+        try:
+            new_name = self._llm_manager.switch(requested)
+            await update.message.reply_text(f"Switched to: {new_name}")
+        except ValueError as e:
+            await update.message.reply_text(str(e))
+
     def build_application(self) -> Application:
         """Build and configure the Telegram bot Application.
 
@@ -615,6 +663,7 @@ class TelegramBot:
         app.add_handler(CommandHandler("start", self._handle_start))
         app.add_handler(CommandHandler("help", self._handle_help))
         app.add_handler(CommandHandler("settings", self._handle_settings))
+        app.add_handler(CommandHandler("provider", self._handle_provider))
         app.add_handler(MessageHandler(filters.VOICE, self._handle_voice))
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_text)

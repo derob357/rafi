@@ -43,9 +43,12 @@ elevenlabs:
     Always be professional, friendly, and concise in your final output to the user.
 
 llm:
-  provider: "openai"                     # openai | anthropic
-  model: "gpt-4o"                        # Model name
+  provider: "openai"                     # openai | anthropic | groq | gemini
+  model: "gpt-4o"                        # Model name (for default provider)
   api_key: "sk-your_openai_api_key"
+  groq_api_key: ""                       # Groq API key (optional)
+  gemini_api_key: ""                     # Google Gemini API key (optional)
+  anthropic_api_key: ""                  # Anthropic Claude API key (optional)
 
 google:
   client_id: "your_google_client_id.apps.googleusercontent.com"

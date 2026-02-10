@@ -27,10 +27,11 @@ MAX_DELAY_SECONDS = 16.0
 class OpenAIProvider(LLMProvider):
     """OpenAI-based LLM provider with retry logic."""
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None) -> None:
         self._config = config
-        self._client = AsyncOpenAI(api_key=config.api_key)
-        self._model = config.model
+        key = api_key or config.api_key
+        self._client = AsyncOpenAI(api_key=key, base_url=base_url) if base_url else AsyncOpenAI(api_key=key)
+        self._model = model or config.model
         self._embedding_model = config.embedding_model
         self._default_temperature = config.temperature
         self._default_max_tokens = config.max_tokens

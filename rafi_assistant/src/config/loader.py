@@ -76,20 +76,23 @@ class ElevenLabsConfig(BaseModel):
 class LLMConfig(BaseModel):
     """LLM provider configuration."""
 
-    provider: str = Field(default="openai", description="LLM provider: openai or anthropic")
-    model: str = Field(default="gpt-4o", description="Model identifier")
-    api_key: str = Field(..., min_length=2, description="LLM API key")
+    provider: str = Field(default="openai", description="Default LLM provider")
+    model: str = Field(default="gpt-4o", description="Model identifier for default provider")
+    api_key: str = Field(..., min_length=2, description="LLM API key (for default provider)")
     embedding_model: str = Field(
         default="text-embedding-3-small",
         description="Embedding model identifier",
     )
     max_tokens: int = Field(default=4096, gt=0, description="Max tokens for LLM response")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="LLM temperature")
+    groq_api_key: str = Field(default="", description="Groq API key")
+    gemini_api_key: str = Field(default="", description="Gemini API key")
+    anthropic_api_key: str = Field(default="", description="Anthropic API key")
 
     @field_validator("provider")
     @classmethod
     def validate_provider(cls, v: str) -> str:
-        allowed = {"openai", "anthropic"}
+        allowed = {"openai", "anthropic", "groq", "gemini"}
         if v.lower() not in allowed:
             raise ValueError(f"LLM provider must be one of: {allowed}")
         return v.lower()
@@ -216,6 +219,9 @@ _ENV_OVERRIDES: dict[str, tuple[str, str]] = {
     "SUPABASE_SERVICE_ROLE_KEY": ("supabase", "service_role_key"),
     "DEEPGRAM_API_KEY": ("deepgram", "api_key"),
     "WEATHER_API_KEY": ("weather", "api_key"),
+    "GROQ_API_KEY": ("llm", "groq_api_key"),
+    "GEMINI_API_KEY": ("llm", "gemini_api_key"),
+    "ANTHROPIC_API_KEY": ("llm", "anthropic_api_key"),
 }
 
 

@@ -25,7 +25,10 @@ from src.bot.telegram_bot import TelegramBot
 from src.db.supabase_client import SupabaseClient
 from src.llm.openai_provider import OpenAIProvider
 from src.llm.anthropic_provider import AnthropicProvider
+from src.llm.groq_provider import GroqProvider
+from src.llm.gemini_provider import GeminiProvider
 from src.llm.provider import LLMProvider
+from src.llm.llm_manager import LLMManager
 from src.services.calendar_service import CalendarService
 from src.services.email_service import EmailService
 from src.services.task_service import TaskService
@@ -70,13 +73,34 @@ _telegram_bot: TelegramBot | None = None
 _scheduler: RafiScheduler | None = None
 
 
-def _create_llm_provider(config: AppConfig) -> LLMProvider:
-    """Create the appropriate LLM provider based on config."""
-    provider = config.llm.provider.lower()
-    if provider == "anthropic":
-        return AnthropicProvider(config=config.llm)
-    # Default to OpenAI
-    return OpenAIProvider(config=config.llm)
+def _create_llm_manager(config: AppConfig) -> LLMManager:
+    """Create an LLM manager with all available providers."""
+    llm_config = config.llm
+    providers: dict[str, LLMProvider] = {}
+
+    # OpenAI is always available (it's the default/required key)
+    providers["openai"] = OpenAIProvider(config=llm_config)
+
+    # Anthropic
+    if llm_config.anthropic_api_key:
+        providers["anthropic"] = AnthropicProvider(
+            config=llm_config,
+            api_key=llm_config.anthropic_api_key,
+            openai_api_key=llm_config.api_key,
+        )
+
+    # Groq
+    if llm_config.groq_api_key:
+        providers["groq"] = GroqProvider(config=llm_config)
+
+    # Gemini
+    if llm_config.gemini_api_key:
+        providers["gemini"] = GeminiProvider(config=llm_config)
+
+    default = llm_config.provider if llm_config.provider in providers else "openai"
+
+    logger.info("Available LLM providers: %s (default: %s)", list(providers.keys()), default)
+    return LLMManager(providers=providers, default=default, embedding_provider=providers["openai"])
 
 
 @asynccontextmanager
@@ -97,8 +121,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     db = SupabaseClient(config=_config.supabase)
     await db.initialize()
 
-    # Initialize LLM provider
-    llm = _create_llm_provider(_config)
+    # Initialize LLM providers
+    llm = _create_llm_manager(_config)
 
     # Initialize services (Google services degrade gracefully without OAuth)
     calendar_service = CalendarService(config=_config, db=db)
@@ -225,6 +249,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.config = _config
     app.state.db = db
     app.state.llm = llm
+    app.state.llm_manager = llm
     app.state.calendar = calendar_service
     app.state.email = email_service
     app.state.tasks = task_service
@@ -279,6 +304,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         config=_config,
         db=db,
         llm=llm,
+        llm_manager=llm,
         memory=memory_service,
         calendar=calendar_service,
         email=email_service,
