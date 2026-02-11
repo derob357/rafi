@@ -5,10 +5,11 @@ import logging
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTextEdit, QPushButton, QSizePolicy, QLineEdit,
+    QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import (
-    QPainter, QColor, QRadialGradient, QFont, QPen, QBrush,
+    QPainter, QColor, QRadialGradient, QFont, QPen, QBrush, QImage, QPixmap
 )
 from qasync import QEventLoop, asyncSlot
 
@@ -220,12 +221,23 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(10, 10, 10, 10)
 
+        left_title_row = QHBoxLayout()
         left_title = QLabel("SYSTEM ACTIVITY")
         left_title.setStyleSheet(
             f"color: {ACCENT_CYAN}; font-size: 11px; font-weight: bold; "
             f"letter-spacing: 3px; border: none; padding-bottom: 6px;"
         )
-        left_layout.addWidget(left_title)
+        left_title_row.addWidget(left_title)
+        left_title_row.addStretch()
+
+        self.log_toggle = QCheckBox("LOGS")
+        self.log_toggle.setChecked(True)
+        self.log_toggle.setStyleSheet(
+            f"QCheckBox {{ color: {TEXT_DIM}; font-size: 9px; font-weight: bold; border: none; }}"
+            f"QCheckBox::indicator {{ width: 10px; height: 10px; }}"
+        )
+        left_title_row.addWidget(self.log_toggle)
+        left_layout.addLayout(left_title_row)
 
         self.activity_log = QTextEdit()
         self.activity_log.setReadOnly(True)
@@ -319,6 +331,13 @@ class MainWindow(QMainWindow):
 
         toolbar.addStretch()
 
+        # State for transcript handling (handling interim results)
+        self._last_is_interim = False
+
+        # Register for log broadcasts
+        self.registry.register_listener("logs", self._on_log_received)
+        self.registry.register_listener("events", self._on_event_received)
+
         # Start background listener for registry events
         asyncio.create_task(self.listen_to_registry())
 
@@ -345,10 +364,30 @@ class MainWindow(QMainWindow):
                 item = await self.registry.transcript_queue.get()
                 text = item.get("text", "")
                 role = item.get("role", "user")
+                is_final = item.get("is_final", True)
+                
                 prefix = f'<span style="color:{ACCENT_BRIGHT};">&gt; USER:</span>'
                 if role == "assistant":
                     prefix = f'<span style="color:{ACCENT_CYAN};">&gt; RAFI:</span>'
+
+                # If the last message we displayed was an interim result from the same role,
+                # we want to replace it instead of appending a new line.
+                if self._last_is_interim:
+                    from PySide6.QtGui import QTextCursor
+                    cursor = self.console.textCursor()
+                    cursor.movePosition(QTextCursor.End)
+                    cursor.select(QTextCursor.BlockUnderCursor)
+                    cursor.removeSelectedText()
+                    # Backspace the leftover newline if needed, but append() handles new blocks.
+                    # A cleaner way to replace the last block:
+                    cursor.deletePreviousChar() # Remove the newline from previous append
+                    self.console.setTextCursor(cursor)
+
                 self.console.append(f"{prefix} {text}")
+                
+                # Update state
+                self._last_is_interim = not is_final
+                
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -359,6 +398,48 @@ class MainWindow(QMainWindow):
         self.activity_log.append(
             f'<span style="color:#606090;">[{self._timestamp()}]</span> {text}'
         )
+
+    async def _on_log_received(self, level: str, name: str, message: str):
+        """Callback from ServiceRegistry when a log is broadcast."""
+        if not self.log_toggle.isChecked():
+            return
+
+        # Color based on level
+        color = "#a0a0ff"  # Info
+        if level == "ERROR" or level == "CRITICAL":
+            color = "#ff4444"
+        elif level == "WARNING":
+            color = "#ffaa00"
+        elif level == "DEBUG":
+            color = "#606090"
+
+        # Update UI (append to QTextEdit)
+        self.activity_log.append(
+            f'<span style="color:#606090;">[{self._timestamp()}]</span> '
+            f'<span style="color:{color};">{level}</span> '
+            f'<span style="color:#808080;">{name}:</span> {message}'
+        )
+
+    async def _on_event_received(self, event: str, data: dict):
+        if event != "visual_frame":
+            return
+
+        jpeg_bytes = data.get("jpeg")
+        if not jpeg_bytes:
+            return
+
+        image = QImage.fromData(jpeg_bytes)
+        if image.isNull():
+            return
+
+        pixmap = QPixmap.fromImage(image)
+        scaled = pixmap.scaled(
+            self.video_label.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        self.video_label.setPixmap(scaled)
+        self.video_label.setText("")
 
     @staticmethod
     def _timestamp():
@@ -422,6 +503,7 @@ class MainWindow(QMainWindow):
                 f"color: {TEXT_DIM}; font-size: 11px; padding: 4px 10px; "
                 f"border: 1px solid {TEXT_DIM}; letter-spacing: 2px;"
             )
+            self.video_label.setPixmap(QPixmap())
             self.video_label.setText("[ NO SIGNAL ]")
             self._log_activity("Camera <b>OFF</b>")
         if self.registry.vision:
@@ -444,6 +526,7 @@ class MainWindow(QMainWindow):
                 f"color: {TEXT_DIM}; font-size: 11px; padding: 4px 10px; "
                 f"border: 1px solid {TEXT_DIM}; letter-spacing: 2px;"
             )
+            self.video_label.setPixmap(QPixmap())
             self.video_label.setText("[ NO SIGNAL ]")
             self._log_activity("Screen share <b>OFF</b>")
         if self.registry.vision:

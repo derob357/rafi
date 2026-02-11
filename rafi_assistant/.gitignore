@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.template
+get_refresh_token.py
 
 # Python
 __pycache__/

@@ -16,6 +16,7 @@ from cryptography.fernet import Fernet
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from src.config.loader import AppConfig
 from src.db.supabase_client import SupabaseClient
@@ -148,29 +149,73 @@ class CalendarService:
                 )
             except Exception as e:
                 logger.error("Failed to refresh Google OAuth token: %s", e)
+                # If refresh fails, tokens might be invalid for the current client_id.
+                # We should clear local credentials so initialize() can try fallback.
+                self._credentials = None
+                # Optionally delete from DB if it's an "invalid_grant" error
+                if "invalid_grant" in str(e).lower():
+                    logger.warning("Invalid Google refresh token. Deleting from database.")
+                    await await_if_needed(
+                        self._db.delete("oauth_tokens", {"provider": "google"})
+                    )
                 raise RuntimeError(
                     "Google OAuth token refresh failed. Client may need to re-authorize."
                 ) from e
 
         return self._credentials
 
-    def _get_service(self) -> Any:
-        """Get or create the Google Calendar API service object."""
+    async def _get_service(self) -> Any:
+        """Get or create the Google Calendar API service object.
+        
+        Attempts to initialize the service if it hasn't been created yet.
+        """
         if self._service is None:
-            raise RuntimeError("Calendar service not initialized. Call initialize() first.")
+            await self.initialize()
+        
+        if self._service is None:
+            raise RuntimeError(
+                "Calendar service not initialized. "
+                "This usually means Google OAuth is not configured. "
+                "Visit the authorization URL in the system logs to fix this."
+            )
         return self._service
 
     async def initialize(self) -> None:
         """Initialize the Google Calendar API service."""
         try:
+            logger.info("Initializing Google Calendar service...")
             credentials = await self._get_credentials()
-            self._service = build("calendar", "v3", credentials=credentials)
-            logger.info("Google Calendar service initialized")
+            
+            if not credentials or not credentials.valid:
+                logger.error("Google Calendar credentials invalid or missing")
+                return
+
+            # static_discovery=False fixes "Method doesn't allow unregistered callers" in some environments
+            self._service = build("calendar", "v3", credentials=credentials, static_discovery=False)
+            logger.info("Google Calendar service initialized successfully")
         except Exception as e:
             logger.error("Failed to initialize Calendar service: %s", e)
-            raise
+            # Don't re-raise to avoid crashing the whole system, but keep service None
+            self._service = None
 
-    async def list_events(self, days: int = 7) -> list[dict[str, Any]]:
+    async def get_auth_url(self) -> str:
+        """Generate a new Google OAuth authorization URL."""
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        flow = InstalledAppFlow.from_client_config(
+            {
+                "installed": {
+                    "client_id": self._config.google.client_id,
+                    "client_secret": self._config.google.client_secret,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+            },
+            SCOPES,
+        )
+        auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline")
+        return auth_url
+
+    async def list_events(self, days: int = 7, *, _retry: bool = True) -> list[dict[str, Any]]:
         """List upcoming calendar events.
 
         Args:
@@ -180,7 +225,7 @@ class CalendarService:
             List of event dictionaries with id, summary, start, end, location.
         """
         days = min(max(days, 1), 30)
-        service = self._get_service()
+        service = await self._get_service()
 
         now = datetime.now(timezone.utc)
         time_max = now + timedelta(days=days)
@@ -220,15 +265,32 @@ class CalendarService:
             logger.info("Retrieved %d calendar events for next %d days", len(events), days)
             return events
 
+        except HttpError as e:
+            status = getattr(e.resp, "status", None)
+            logger.error("Failed to list calendar events: %s", e)
+
+            if status == 401 and _retry:
+                # Token expired or revoked; try refresh once.
+                self._credentials = None
+                self._service = None
+                await self.initialize()
+                return await self.list_events(days, _retry=False)
+
+            # 403 usually means OAuth client/scopes/API project mismatch.
+            if status == 403:
+                raise RuntimeError(
+                    "Google Calendar access forbidden. Check OAuth client, scopes, and API access."
+                ) from e
+
+            raise
         except Exception as e:
             logger.error("Failed to list calendar events: %s", e)
-            # Try refreshing credentials and retrying once
-            try:
+            if _retry:
                 self._credentials = None
+                self._service = None
                 await self.initialize()
-                return await self.list_events(days)
-            except Exception:
-                raise
+                return await self.list_events(days, _retry=False)
+            raise
 
     async def create_event(
         self,
@@ -248,7 +310,7 @@ class CalendarService:
         Returns:
             Created event dict with id, summary, start, end, location. None on failure.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         event_body: dict[str, Any] = {
             "summary": summary,
@@ -295,7 +357,7 @@ class CalendarService:
         Returns:
             Updated event dict, or None on failure.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             # Fetch existing event
@@ -346,7 +408,7 @@ class CalendarService:
         Returns:
             True if deletion succeeded, False otherwise.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             service.events().delete(

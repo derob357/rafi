@@ -246,6 +246,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     registry.tools.register_tool("create_event", calendar_service.create_event, "Create a new calendar event")
     registry.tools.register_tool("update_event", _update_event_adapter, "Update a calendar event")
     registry.tools.register_tool("delete_event", calendar_service.delete_event, "Delete a calendar event")
+    registry.tools.register_tool("get_google_auth_url", calendar_service.get_auth_url, "Get the Google OAuth authorization URL to fix calendar/email initialization")
 
     registry.tools.register_tool("read_emails", email_service.list_emails, "Read recent emails")
     registry.tools.register_tool("search_emails", email_service.search_emails, "Search emails")

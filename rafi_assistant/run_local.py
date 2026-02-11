@@ -16,6 +16,41 @@ from src.ui.desktop import MainWindow
 logger = logging.getLogger("rafi.local")
 
 
+class SignalingLogHandler(logging.Handler):
+    """Custom logging handler that broadcasts logs to the ServiceRegistry."""
+
+    def __init__(self, registry=None):
+        super().__init__()
+        self.registry = registry
+        self._loop = asyncio.get_event_loop()
+        self._is_broadcasting = False
+
+    def set_registry(self, registry):
+        self.registry = registry
+
+    def emit(self, record):
+        if self._is_broadcasting or not self.registry:
+            return
+
+        try:
+            self._is_broadcasting = True
+            msg = self.format(record)
+            # Use thread-safe way to call the async broadcast
+            if self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self.registry.broadcast_log(
+                        record.levelname,
+                        record.name,
+                        msg
+                    ),
+                    self._loop
+                )
+        except Exception:
+            self.handleError(record)
+        finally:
+            self._is_broadcasting = False
+
+
 async def main():
     """Run FastAPI server and PySide6 UI in a shared qasync event loop."""
     config = uvicorn.Config(
@@ -28,6 +63,12 @@ async def main():
     )
     server = uvicorn.Server(config)
     server.install_signal_handlers = lambda: None  # Qt handles signals
+
+    # Attach signaling log handler to root logger BEFORE startup
+    # so we can catch calibration/initialization logs.
+    handler = SignalingLogHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logging.getLogger().addHandler(handler)
 
     server_task = asyncio.create_task(server.serve())
 
@@ -44,6 +85,7 @@ async def main():
         return
 
     registry = app.state.registry
+    handler.set_registry(registry)
     print("Registry ready. Launching UI.", flush=True)
 
     window = MainWindow(registry)

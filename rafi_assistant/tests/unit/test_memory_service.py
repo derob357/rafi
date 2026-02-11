@@ -102,6 +102,20 @@ class TestStoreMessage:
             if isinstance(data, dict) and "embedding" in data:
                 assert len(data["embedding"]) == EMBEDDING_DIM
 
+    @pytest.mark.asyncio
+    async def test_normalizes_desktop_source(self, mock_supabase, mock_openai, mock_config):
+        record = _message_record(source="system")
+        mock_supabase.insert = AsyncMock(return_value=record)
+        mock_openai.embed = AsyncMock(return_value=_mock_embedding())
+
+        svc = MemoryService(db=mock_supabase, llm=mock_openai)
+        await svc.store_message(role="user", content="Hello", source="desktop_text")
+
+        insert_call = mock_supabase.insert.call_args
+        assert insert_call is not None
+        data = insert_call[0][1] if len(insert_call[0]) > 1 else insert_call[1].get("data", {})
+        assert data.get("source") == "system"
+
 
 @pytest.mark.skipif(MemoryService is None, reason="MemoryService not yet implemented")
 class TestSearchMemory:

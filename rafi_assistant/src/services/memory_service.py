@@ -15,6 +15,18 @@ from src.utils.async_utils import await_if_needed
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_SOURCES = {
+    "telegram_text",
+    "telegram_voice",
+    "twilio_call",
+    "system",
+}
+
+SOURCE_ALIASES = {
+    "desktop_text": "system",
+    "desktop_voice": "system",
+}
+
 
 class MemoryService:
     """Conversation memory with semantic search capabilities."""
@@ -46,6 +58,11 @@ class MemoryService:
             logger.debug("Skipping empty message storage")
             return None
 
+        source = SOURCE_ALIASES.get(source, source)
+        if source not in ALLOWED_SOURCES:
+            logger.warning("Unknown message source '%s', normalizing to 'system'", source)
+            source = "system"
+
         # Generate embedding
         embedding: Optional[list[float]] = None
         try:
@@ -66,15 +83,22 @@ class MemoryService:
 
         result = await await_if_needed(self._db.insert("messages", data))
 
+        # FALLBACK: If insert fails (likely due to missing 'desktop_voice' source in DB constraint),
+        # try again with a guaranteed source.
+        if not result and source != "system":
+            logger.warning("Message storage failed with source '%s', trying fallback 'system'", source)
+            data["source"] = "system"
+            result = await await_if_needed(self._db.insert("messages", data))
+
         if result:
             logger.debug(
                 "Stored %s message (source: %s, has_embedding: %s)",
                 role,
-                source,
+                data["source"],
                 embedding is not None,
             )
         else:
-            logger.error("Failed to store message")
+            logger.error("Failed to store message even with fallback")
 
         return result
 

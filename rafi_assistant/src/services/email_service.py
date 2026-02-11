@@ -136,21 +136,29 @@ class EmailService:
 
         return self._credentials
 
+    async def _get_service(self) -> Any:
+        """Get the Gmail API service, ensuring it is initialized."""
+        if self._service is None:
+            await self.initialize()
+
+        if self._service is None:
+            raise RuntimeError(
+                "Gmail service not initialized. "
+                "This usually means Google OAuth is not configured. "
+                "Check system logs for the authorization URL."
+            )
+        return self._service
+
     async def initialize(self) -> None:
         """Initialize the Gmail API service."""
         try:
             credentials = await self._get_credentials()
-            self._service = build("gmail", "v1", credentials=credentials)
-            logger.info("Gmail service initialized")
+            # static_discovery=False matches the calendar fix
+            self._service = build("gmail", "v1", credentials=credentials, static_discovery=False)
+            logger.info("Gmail service initialized successfully")
         except Exception as e:
             logger.error("Failed to initialize Gmail service: %s", e)
-            raise
-
-    def _get_service(self) -> Any:
-        """Get the Gmail API service, ensuring it is initialized."""
-        if self._service is None:
-            raise RuntimeError("Gmail service not initialized. Call initialize() first.")
-        return self._service
+            self._service = None
 
     def _extract_body(self, payload: dict[str, Any]) -> str:
         """Extract and sanitize the email body from a Gmail message payload.
@@ -235,7 +243,7 @@ class EmailService:
             List of email dicts with id, from, to, subject, date, snippet, body.
         """
         count = min(max(count, 1), 50)
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             query = "is:unread" if unread_only else ""
@@ -296,7 +304,7 @@ class EmailService:
         Returns:
             List of matching email dicts.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             result = (
@@ -362,7 +370,7 @@ class EmailService:
         Returns:
             Sent message dict with id and threadId, or None on failure.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             message = MIMEText(body)
@@ -403,7 +411,7 @@ class EmailService:
         Returns:
             Email dict with full details, or None on failure.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             msg = (
@@ -438,7 +446,7 @@ class EmailService:
         Returns:
             Number of unread emails, or 0 on failure.
         """
-        service = self._get_service()
+        service = await self._get_service()
 
         try:
             result = (

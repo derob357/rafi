@@ -211,6 +211,31 @@ class SupabaseClient:
             logger.error("Failed to upsert into '%s': %s", table, e)
             return None
 
+    async def delete(
+        self,
+        table: str,
+        filters: dict[str, Any],
+    ) -> bool:
+        """Delete rows from a table matching specified filters.
+
+        Args:
+            table: Table name.
+            filters: Dictionary of column-name to exact-match value filters.
+
+        Returns:
+            True if at least one row was deleted, False otherwise.
+        """
+        try:
+            query = self.client.table(table).delete()
+            for key, val in filters.items():
+                query = query.eq(key, val)
+            
+            response = await query.execute()
+            return len(response.data) > 0
+        except Exception as e:
+            logger.error("Failed to delete from '%s': %s", table, e)
+            return False
+
     async def rpc(
         self,
         function_name: str,

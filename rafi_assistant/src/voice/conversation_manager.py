@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+import re
 import sounddevice as sd
 import numpy as np
 from deepgram import AsyncDeepgramClient
@@ -31,6 +32,51 @@ class ConversationManager:
         self._dg_connection = None
         self._audio_stream = None
         self._loop = asyncio.get_event_loop()
+        self._process_lock = asyncio.Lock()  # Prevent concurrent processing of voice input
+        self._last_final_text = ""
+        self._last_final_time = 0
+        self._min_barge_in_words = 1
+        self._echo_token_threshold = 0.85
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """Normalize text for echo checks (lowercase, strip punctuation)."""
+        if not text:
+            return ""
+        normalized = re.sub(r"[^a-z0-9\s]", " ", text.lower())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    @staticmethod
+    def _token_overlap_ratio(left: str, right: str) -> float:
+        left_tokens = set(left.split())
+        right_tokens = set(right.split())
+        if not left_tokens or not right_tokens:
+            return 0.0
+        overlap = left_tokens & right_tokens
+        return len(overlap) / max(len(left_tokens), len(right_tokens))
+
+    def _is_echo_text(self, text: str) -> bool:
+        normalized = self._normalize_text(text)
+        if not normalized:
+            return False
+
+        candidates = []
+        if self._current_speech_text:
+            candidates.append(self._current_speech_text)
+        candidates.extend(self._speech_history[-2:])
+
+        for candidate in candidates:
+            candidate_norm = self._normalize_text(candidate)
+            if not candidate_norm:
+                continue
+            if normalized in candidate_norm or candidate_norm in normalized:
+                return True
+            if len(normalized.split()) >= 3:
+                overlap = self._token_overlap_ratio(normalized, candidate_norm)
+                if overlap >= self._echo_token_threshold:
+                    return True
+        return False
 
     async def start_listening(self):
         """Start the microphone listener and stream to Deepgram."""
@@ -53,6 +99,7 @@ class ConversationManager:
                 encoding="linear16",
                 channels="1",
                 sample_rate="16000",
+                endpointing="300",
             )
             
             self._dg_connection = await self._dg_connection_context.__aenter__()
@@ -68,21 +115,19 @@ class ConversationManager:
                 is_final = message.is_final
                 now = asyncio.get_event_loop().time()
 
-                # COOLDOWN: Reject transcripts that arrive just after we stop speaking
-                # (prevents lingering background audio from being processed)
-                if not self._is_speaking and (now - self._last_speech_end_time < 1.0):
+                # COOLDOWN: Reject transcripts right after we stop speaking,
+                # unless we just barged in (let the user finish their interruption).
+                recent_barge_in = now - self._last_barge_in_time < 1.0
+                if not self._is_speaking and not recent_barge_in and (now - self._last_speech_end_time < 1.0):
                     logger.debug(f"Ignoring post-speech cooldown transcript: '{sentence}'")
                     return
 
                 # BARGE-IN: If assistant is speaking and we detect non-empty transcript, stop playback immediately
                 if self._is_speaking:
-                    # Ignore if the transcript is very short (likely echo or breath noise)
-                    if len(sentence.split()) < 3:
+                    if len(sentence.split()) < self._min_barge_in_words:
                         return
-                    
-                    # FUZZY ECHO DETECTION: Check if the user is just "saying" what Rafi is currently saying
-                    combined_history = " ".join(self._speech_history[-2:]) + " " + (self._current_speech_text or "")
-                    if sentence.lower() in combined_history.lower():
+
+                    if self._is_echo_text(sentence):
                         logger.debug(f"Ignoring self-echo during playback: {sentence}")
                         return
 
@@ -94,6 +139,13 @@ class ConversationManager:
                 await self.registry.broadcast_transcript(sentence, is_final=is_final)
                 
                 if is_final:
+                    # DEDUPLICATION: Deepgram sometimes sends multiple identical final results
+                    if sentence == self._last_final_text and (now - self._last_final_time < 1.0):
+                        return
+                    
+                    self._last_final_text = sentence
+                    self._last_final_time = now
+                    
                     logger.info(f"STT Final: {sentence}")
                     # Trigger LLM processing for final sentences in background
                     asyncio.create_task(self._process_user_input(sentence))
@@ -113,9 +165,9 @@ class ConversationManager:
                 if status:
                     logger.warning(f"Audio stream status: {status}")
                 
-                # MUTE during TTS to prevent feedback loops
-                if self._is_speaking:
-                    return
+                # NOTE: We no longer return early when self._is_speaking is True
+                # to allow barge-in support. Software echo-detection in on_message
+                # handles the feedback prevention.
 
                 if self._dg_connection:
                     # Send bytes to Deepgram - converting CFFI buffer to bytes
@@ -170,6 +222,7 @@ class ConversationManager:
         if self._is_speaking and self.tts:
             await self.tts.stop()
             self._is_speaking = False
+            self._last_speech_end_time = asyncio.get_event_loop().time()
             await self.registry.emit("voice", status="idle")
 
     async def process_text_input(self, text: str):
@@ -232,93 +285,96 @@ class ConversationManager:
 
     async def _process_user_input(self, text: str):
         """Send finalized transcript to LLM and handle response/tools."""
-        if self._is_speaking or not text.strip():
+        if not text.strip():
             return
 
-        # MINIMUM WORD COUNT: Filter out fragments logic
-        words = text.split()
-        if len(words) < 2:
-            logger.debug(f"Ignoring single-word transcript fragment: '{text}'")
-            return
+        async with self._process_lock:
+            # Re-check is_speaking inside lock, but only if not a barge-in
+            if self._is_speaking:
+                logger.debug("Still speaking, ignoring transcript for new process")
+                return
 
-        # ECHO PROTECTION: If we just barged in, check if this transcript is actually the assistant's echo
-        now = asyncio.get_event_loop().time()
-        
-        # Check against recent speech history
-        combined_history = " ".join(self._speech_history[-2:]) + " " + (self._current_speech_text or "")
-        if text.lower() in combined_history.lower():
-            logger.info(f"Ignoring echo transcript: '{text}'")
-            return
+            # MINIMUM WORD COUNT: Filter out fragments logic
+            words = text.split()
+            if len(words) < 2:
+                logger.debug(f"Ignoring single-word transcript fragment: '{text}'")
+                return
 
-        if now - self._last_barge_in_time < 2.0:
-            if text.lower() in combined_history.lower():
+            # ECHO PROTECTION: Ignore assistant echo even if punctuation differs.
+            now = asyncio.get_event_loop().time()
+            if self._is_echo_text(text):
+                logger.info(f"Ignoring echo transcript: '{text}'")
+                return
+
+            if now - self._last_barge_in_time < 2.0 and self._is_echo_text(text):
                 logger.info(f"Ignoring echo transcript after barge-in: '{text}'")
                 return
 
-        logger.info(f"Processing voice input: {text}")
-        
-        # Store user message in memory
-        if self.registry.memory:
-            await self.registry.memory.store_message(role="user", content=text, source="desktop_voice")
-
-        try:
-            # Inform the LLM about the voice context
-            system_prompt = self.registry.config.elevenlabs.personality
-            voice_context = "\n\nNOTE: The user is speaking via microphone. You should be concise and conversational. Respond as if you can hear them perfectly."
+            logger.info(f"Processing voice input: {text}")
             
-            # Get response from LLM via registry
-            response_dict = await self.registry.llm.chat(
-                messages=[
-                    {"role": "system", "content": system_prompt + voice_context},
-                    {"role": "user", "content": text}
-                ],
-                tools=ALL_TOOLS
-            )
-            
-            tool_calls = response_dict.get("tool_calls", [])
-            response = response_dict.get("content")
+            # Store user message in memory
+            if self.registry.memory:
+                await self.registry.memory.store_message(role="user", content=text, source="desktop_voice")
 
-            # Handle Tool Calls
-            if tool_calls:
-                logger.info(f"LLM requested {len(tool_calls)} tool calls")
-                for tc in tool_calls:
-                    name = tc["function"]["name"]
-                    args = json.loads(tc["function"]["arguments"])
-                    
-                    # Execute tool
-                    result = await self.registry.tools.invoke(name, **args)
-                    
-                    # Store tool result in memory (optional, but good for context)
-                    if self.registry.memory:
-                        await self.registry.memory.store_message(
-                            role="system", 
-                            content=f"Tool {name} result: {result}", 
-                            source="system"
+            try:
+                # Inform the LLM about the voice context
+                system_prompt = self.registry.config.elevenlabs.personality
+                voice_context = "\n\nNOTE: The user is speaking via microphone. You should be concise and conversational. Respond as if you can hear them perfectly."
+                
+                # Get response from LLM via registry
+                response_dict = await self.registry.llm.chat(
+                    messages=[
+                        {"role": "system", "content": system_prompt + voice_context},
+                        {"role": "user", "content": text}
+                    ],
+                    tools=ALL_TOOLS
+                )
+                
+                tool_calls = response_dict.get("tool_calls", [])
+                response = response_dict.get("content")
+
+                # Handle Tool Calls
+                if tool_calls:
+                    logger.info(f"LLM requested {len(tool_calls)} tool calls")
+                    result = None
+                    for tc in tool_calls:
+                        name = tc["function"]["name"]
+                        args = json.loads(tc["function"]["arguments"])
+                        
+                        # Execute tool
+                        result = await self.registry.tools.invoke(name, **args)
+                        
+                        # Store tool result in memory (optional, but good for context)
+                        if self.registry.memory:
+                            await self.registry.memory.store_message(
+                                role="system", 
+                                content=f"Tool {name} result: {result}", 
+                                source="system"
+                            )
+
+                    # After tool execution, we might want to tell the user what happened
+                    # If there's no content, we trigger a second chat to summarize.
+                    # We pass the tool result in a way that doesn't violate OpenAI's 
+                    # requirement that tool_calls be followed by tool results.
+                    if not response:
+                        followup = await self.registry.llm.chat(
+                            messages=[
+                                {"role": "system", "content": f"You just executed a tool: {name}. Results: {result}. Briefly summarize the outcome for a voice response."},
+                                {"role": "user", "content": text},
+                            ]
                         )
+                        response = followup.get("content")
 
-                # After tool execution, we might want to tell the user what happened
-                # If there's no content, we trigger a second chat to summarize
-                if not response:
-                    followup = await self.registry.llm.chat(
-                        messages=[
-                            {"role": "system", "content": "You just executed tools requested by the user. Summarize what you did concisely for voice response."},
-                            {"role": "user", "content": text},
-                            {"role": "assistant", "content": "", "tool_calls": tool_calls},
-                            {"role": "system", "content": f"Results: {result}"} # Simplification for single result
-                        ]
-                    )
-                    response = followup.get("content")
-
-            if response:
-                # Store assistant response in memory
-                if self.registry.memory:
-                    await self.registry.memory.store_message(role="assistant", content=response, source="desktop_voice")
-                
-                await self.registry.broadcast_transcript(response, is_final=True)
-                await self.speak(response)
-                
-        except Exception as e:
-            logger.error(f"Error processing voice input: {e}")
+                if response:
+                    # Store assistant response in memory
+                    if self.registry.memory:
+                        await self.registry.memory.store_message(role="assistant", content=response, source="desktop_voice")
+                    
+                    await self.registry.broadcast_transcript(response, is_final=True, role="assistant")
+                    await self.speak(response)
+                    
+            except Exception as e:
+                logger.error(f"Error processing voice input: {e}")
 
     async def speak(self, text: str):
         """Generate speech from text via ElevenLabsAgent."""

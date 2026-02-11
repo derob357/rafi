@@ -9,7 +9,7 @@ async def test_capture_dispatcher_toggle_camera():
     registry = MagicMock()
     registry.broadcast_event = AsyncMock()
     
-    dispatcher = CaptureDispatcher(registry)
+    dispatcher = CaptureDispatcher(registry, simulate=True)
     
     await dispatcher.toggle_camera(True)
     assert dispatcher._camera_active is True
@@ -26,7 +26,7 @@ async def test_capture_dispatcher_toggle_screen():
     registry = MagicMock()
     registry.broadcast_event = AsyncMock()
     
-    dispatcher = CaptureDispatcher(registry)
+    dispatcher = CaptureDispatcher(registry, simulate=True)
     
     await dispatcher.toggle_screen(True)
     assert dispatcher._screen_active is True

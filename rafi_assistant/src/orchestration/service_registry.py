@@ -56,7 +56,8 @@ class ServiceRegistry:
             "tools": [],
             "ui": [],
             "transcript": [],
-            "events": []
+            "events": [],
+            "logs": []
         }
     )
 
@@ -65,7 +66,7 @@ class ServiceRegistry:
         Register an async callback for a specific event type.
         
         Args:
-            event_type: The category of event (e.g., 'voice', 'transcript', 'ui').
+            event_type: The category of event (e.g., 'voice', 'transcript', 'ui', 'logs').
             callback: An async function to be called when the event is emitted.
         """
         if event_type not in self._listeners:
@@ -94,11 +95,16 @@ class ServiceRegistry:
             return_exceptions=True
         )
 
-    async def broadcast_transcript(self, text: str, is_final: bool = True) -> None:
+    async def broadcast_transcript(self, text: str, is_final: bool = True, role: str = "user") -> None:
         """Add a transcript segment to the broadcast queue and notify listeners."""
-        payload = {"text": text, "is_final": is_final}
+        payload = {"text": text, "is_final": is_final, "role": role}
         await self.transcript_queue.put(payload)
         await self.emit("transcript", **payload)
+
+    async def broadcast_log(self, level: str, name: str, message: str) -> None:
+        """Notify listeners of a log event."""
+        payload = {"level": level, "name": name, "message": message}
+        await self.emit("logs", **payload)
 
     async def broadcast_tool_result(self, tool_name: str, result: Any) -> None:
         """Add a tool execution result to the broadcast queue and notify listeners."""
