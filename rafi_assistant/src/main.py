@@ -571,11 +571,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.deepgram = deepgram_stt
     app.state.cad = cad_service
     app.state.browser = browser_service
+    app.state.tool_registry = registry.tools
 
     # Create Telegram send helper for scheduler fallback
     async def send_telegram_message(text: str) -> None:
         if _channel_manager:
             await _channel_manager.send_to_preferred(text)
+
+    # Wire late-binding dependencies into TwilioHandler
+    twilio_handler.set_tool_registry(registry.tools)
+    twilio_handler.set_elevenlabs_agent(elevenlabs_agent)
+    twilio_handler.set_db(db)
+    twilio_handler.set_telegram_send(send_telegram_message)
 
     # Initialize scheduler
     _scheduler = RafiScheduler(_config)

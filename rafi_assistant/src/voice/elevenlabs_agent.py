@@ -93,10 +93,8 @@ class ElevenLabsAgent:
             },
         }
 
-        # Tools temporarily disabled - ElevenLabs API schema validation
-        # needs investigation. Agent works for voice without tools.
-        # if tools:
-        #     payload["conversation_config"]["agent"]["prompt"]["tools"] = tools
+        if tools:
+            payload["conversation_config"]["agent"]["prompt"]["tools"] = tools
 
         headers = {
             "xi-api-key": self._api_key,
@@ -119,10 +117,32 @@ class ElevenLabsAgent:
                 logger.error("ElevenLabs agent creation response missing agent_id")
                 raise ValueError("No agent_id in response")
 
-            logger.info("ElevenLabs agent created: %s", self._agent_id)
+            logger.info("ElevenLabs agent created: %s (tools: %s)", self._agent_id, bool(tools))
             return self._agent_id
 
         except httpx.HTTPStatusError as e:
+            # If agent creation fails with tools, retry without them
+            if tools and "tools" in payload.get("conversation_config", {}).get("agent", {}).get("prompt", {}):
+                logger.warning(
+                    "ElevenLabs agent creation failed with tools (%s), retrying without tools",
+                    e.response.text[:200],
+                )
+                payload["conversation_config"]["agent"]["prompt"].pop("tools", None)
+                try:
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        response = await client.post(
+                            f"{self._base_url}/convai/agents/create",
+                            headers=headers,
+                            json=payload,
+                        )
+                        response.raise_for_status()
+                    result = response.json()
+                    self._agent_id = result.get("agent_id")
+                    if self._agent_id:
+                        logger.info("ElevenLabs agent created without tools: %s", self._agent_id)
+                        return self._agent_id
+                except Exception as retry_err:
+                    logger.error("Retry without tools also failed: %s", str(retry_err))
             logger.error("Failed to create ElevenLabs agent: %s", str(e))
             logger.error("ElevenLabs response body: %s", e.response.text)
             raise

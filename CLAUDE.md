@@ -10,8 +10,8 @@ Before doing any work, read `RAFI_SPEC.md` for the full project specification.
 
 Rafi is a template-based personal AI assistant platform. Three sub-projects:
 
-- **rafi_assistant/** — The AI assistant (Python, FastAPI, Docker). 11 skills, 25+ tools, 4 channels, 4 LLM providers.
-- **rafi_deploy/** — CLI tooling for onboarding and deploying instances.
+- **rafi_assistant/** — The AI assistant (Python, FastAPI, Docker). 11 skills, 25+ tools, 2 active channels (Telegram, WhatsApp) + 2 stubs (Slack, Discord), 4 LLM providers (OpenAI, Anthropic, Groq, Gemini).
+- **rafi_deploy/** — CLI tooling for onboarding and deploying instances. Fully implemented: recorder, transcriber, config extractor, deployer, provisioners.
 - **myOpenClaw/** — Reference architecture (read-only).
 
 ## Skill Routing
@@ -35,7 +35,12 @@ USE WHEN patterns for directing work to the right area:
 | "ISC", "verify", "criteria" | Algorithm (ISC) | `src/services/isc_service.py`, `src/channels/processor.py` |
 | "learning", "rating", "feedback" | Learning system | `src/services/learning_service.py` |
 | "dashboard", "observability" | Dashboard | `src/main.py` (dashboard routes) |
-| "MCP", "mcp server" | MCP server | `src/mcp/` |
+| "MCP", "mcp server" | MCP server | `src/mcp/server.py`, `src/mcp/sse_transport.py` |
+| "browser", "web browsing", "playwright" | Browser service | `src/services/browser_service.py` |
+| "screen", "mouse", "keyboard", "desktop" | Screen/Desktop | `src/services/screen_service.py`, `src/ui/desktop.py` |
+| "CAD", "3D", "STL" | CAD generation | `src/services/cad_service.py` |
+| "orchestration", "registry", "services" | Service registry | `src/orchestration/service_registry.py` |
+| "vision", "capture", "camera" | Vision capture | `src/vision/capture.py` |
 
 ## Architecture
 
@@ -118,11 +123,13 @@ ssh -i ~/.ssh/rafi-key.pem ec2-user@18.119.109.47 \
 
 - **Config validation**: Pydantic models in `src/config/loader.py`. App refuses to start on invalid config.
 - **Input sanitization**: All external text through `src/security/sanitizer.py` before LLM or DB.
-- **LLM provider abstraction**: `LLMManager` orchestrates multiple providers with failover and cost-based routing.
+- **LLM provider abstraction**: `LLMManager` orchestrates 4 providers (OpenAI, Anthropic, Groq, Gemini) with failover and cost-based routing.
 - **Tool registration**: Tools gated by skill eligibility. `ToolRegistry.invoke()` handles dispatch.
 - **Channel-agnostic processing**: `MessageProcessor` provides the same pipeline for all channels with ISC verification.
 - **Memory promotion**: `MemoryPromotionJob` automatically promotes daily log insights to MEMORY.md.
 - **Learning loop**: `LearningService` captures user feedback and derives behavioral adjustments.
+- **Service registry**: `ServiceRegistry` in `src/orchestration/service_registry.py` provides centralized service access and event listeners.
+- **MCP server**: `src/mcp/server.py` + `sse_transport.py` expose tools via Model Context Protocol over SSE (Cloudflare tunnel).
 
 ## Security Requirements
 
@@ -136,3 +143,10 @@ ssh -i ~/.ssh/rafi-key.pem ec2-user@18.119.109.47 \
 ## Test Markers
 
 Tests use pytest markers: `@pytest.mark.unit`, `@pytest.mark.integration`, `@pytest.mark.security`, `@pytest.mark.e2e`.
+
+## Additional Docs
+
+- `LOCAL_SETUP.md` — macOS development setup (Python, Cloudflare tunnel, Google OAuth, optional deps)
+- `rafi_assistant/GOOGLE_INTEGRATION_RUNBOOK.md` — Google Calendar/Gmail OAuth setup
+- `rafi_assistant/TEST_PLAN.md` — Detailed test strategy
+- `.mcp.json` — MCP server config (local stdio + remote SSE via `rafi.intentionai.ai`)

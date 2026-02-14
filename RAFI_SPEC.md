@@ -85,15 +85,20 @@ Telegram Text/Voice Message
 | Telegram Bot | python-telegram-bot (async) |
 | Voice Calls | Twilio + ElevenLabs Conversational AI |
 | Async Transcription | Deepgram (Telegram voice messages) |
-| Default LLM | OpenAI (configurable per client) |
+| LLM (default) | OpenAI (configurable per client) |
+| LLM (additional) | Anthropic Claude, Groq, Google Gemini (failover + cost routing via LLMManager) |
 | Calendar & Email | Google Calendar API + Gmail API (google-api-python-client) |
 | Weather | WeatherAPI.com (httpx) |
 | Database & Memory | Supabase (supabase-py) with pgvector |
 | Embeddings | OpenAI text-embedding-3-large |
 | Scheduling | APScheduler |
+| Web Automation | Playwright (headless browser) |
+| Desktop Automation | pyautogui (mouse/keyboard control) |
+| CAD/3D Modeling | build123d (parametric 3D, STL export) |
+| MCP Server | Model Context Protocol over SSE (Cloudflare tunnel) |
 | Config | PyYAML + pydantic for validation |
 | HTTP | httpx (async) |
-| Containerization | Docker |
+| Containerization | Docker + Cloudflare tunnel (replaces Nginx) |
 
 ### Project Structure
 
@@ -104,24 +109,58 @@ rafi_assistant/
 ├── requirements.txt
 ├── pyproject.toml
 ├── pytest.ini
+├── config.yaml                    # Live client config (secrets on EC2 only)
+├── cloudflared-config.yml         # Cloudflare tunnel config
+├── run_local.py                   # Local runner with PySide6 desktop UI
 ├── DEPENDENCIES.md
+├── GOOGLE_INTEGRATION_RUNBOOK.md  # Google OAuth setup guide
+├── TEST_PLAN.md                   # Detailed test strategy
 ├── config/
 │   └── client_config.example.yaml
+├── memory/                        # Markdown-based personality + context (source of truth)
+│   ├── SOUL.md                    # Agent identity and personality
+│   ├── USER.md                    # User profile and preferences
+│   ├── MEMORY.md                  # Long-term curated memories
+│   ├── AGENTS.md                  # Behavioral rules and safety
+│   ├── HEARTBEAT.md               # Proactive check checklist
+│   └── daily/                     # Auto-generated session logs (YYYY-MM-DD.md)
+├── skills/                        # Skill registry (11 skills, YAML frontmatter + markdown)
+│   ├── calendar/SKILL.md
+│   ├── email/SKILL.md
+│   ├── tasks/SKILL.md
+│   ├── notes/SKILL.md
+│   ├── weather/SKILL.md
+│   ├── web/SKILL.md
+│   ├── cad/SKILL.md
+│   ├── screen/SKILL.md
+│   ├── memory/SKILL.md
+│   ├── settings/SKILL.md
+│   └── voice/SKILL.md
 ├── src/
 │   ├── __init__.py
-│   ├── main.py                    # Entry point: loads config, starts bot + scheduler
+│   ├── main.py                    # FastAPI entry point: loads config, starts all services
 │   ├── config/
 │   │   ├── __init__.py
 │   │   └── loader.py              # Pydantic models for config validation
-│   ├── bot/
+│   ├── bot/                       # Legacy Telegram bot (backward compat)
 │   │   ├── __init__.py
-│   │   ├── telegram_bot.py        # Telegram message handlers
+│   │   ├── telegram_bot.py        # Standalone TelegramBot class
 │   │   └── command_parser.py      # Parse settings commands from text
+│   ├── channels/                  # Channel adapter pattern (normalized messaging)
+│   │   ├── __init__.py
+│   │   ├── base.py                # ChannelAdapter ABC + ChannelMessage dataclass
+│   │   ├── manager.py             # ChannelManager: lifecycle + routing
+│   │   ├── processor.py           # MessageProcessor: shared LLM orchestration + ISC
+│   │   ├── telegram.py            # TelegramAdapter (polling)
+│   │   ├── whatsapp.py            # WhatsAppAdapter (Twilio webhooks)
+│   │   ├── slack.py               # SlackAdapter (stub)
+│   │   └── discord.py             # DiscordAdapter (stub)
 │   ├── voice/
 │   │   ├── __init__.py
 │   │   ├── twilio_handler.py      # Twilio webhook + outbound call initiation
 │   │   ├── elevenlabs_agent.py    # ElevenLabs Conversational AI agent setup
-│   │   └── deepgram_stt.py        # Async transcription for voice messages
+│   │   ├── deepgram_stt.py        # Async transcription for voice messages
+│   │   └── conversation_manager.py # Voice conversation loop (requires PortAudio)
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── calendar_service.py    # Google Calendar CRUD
@@ -129,60 +168,94 @@ rafi_assistant/
 │   │   ├── task_service.py        # Task CRUD (Supabase)
 │   │   ├── note_service.py        # Note CRUD (Supabase)
 │   │   ├── weather_service.py     # WeatherAPI.com queries
-│   │   └── memory_service.py      # Semantic memory: embed, store, search
+│   │   ├── memory_service.py      # Semantic memory: embed, store, search (pgvector)
+│   │   ├── memory_files.py        # Markdown file I/O for memory/ directory
+│   │   ├── browser_service.py     # Playwright web browsing + search
+│   │   ├── screen_service.py      # pyautogui desktop automation
+│   │   ├── cad_service.py         # build123d parametric 3D modeling
+│   │   ├── isc_service.py         # Ideal State Criteria generation + verification
+│   │   └── learning_service.py    # User feedback capture + behavioral adjustments
 │   ├── llm/
 │   │   ├── __init__.py
 │   │   ├── provider.py            # Abstract LLM interface
+│   │   ├── llm_manager.py         # Multi-provider orchestrator with failover
 │   │   ├── openai_provider.py     # OpenAI implementation
 │   │   ├── anthropic_provider.py  # Claude implementation
-│   │   └── tool_definitions.py    # Function/tool schemas for LLM
+│   │   ├── groq_provider.py       # Groq implementation
+│   │   ├── gemini_provider.py     # Google Gemini implementation
+│   │   └── tool_definitions.py    # Function/tool schemas for LLM (25+ tools)
 │   ├── scheduling/
 │   │   ├── __init__.py
-│   │   ├── scheduler.py           # APScheduler setup
+│   │   ├── scheduler.py           # RafiScheduler: APScheduler wrapper
 │   │   ├── briefing_job.py        # Morning briefing logic
-│   │   └── reminder_job.py        # Event reminder logic
+│   │   ├── reminder_job.py        # Event reminder logic
+│   │   ├── heartbeat.py           # Proactive checks every 30min
+│   │   └── memory_promotion.py    # Daily insight promotion to MEMORY.md
+│   ├── skills/
+│   │   ├── __init__.py
+│   │   ├── loader.py              # Skill discovery, filtering, tool name extraction
+│   │   └── types.py               # Skill dataclass
+│   ├── tools/
+│   │   └── tool_registry.py       # Dynamic tool dispatch with schema support
+│   ├── mcp/
+│   │   ├── __init__.py
+│   │   ├── server.py              # MCP protocol implementation
+│   │   └── sse_transport.py       # SSE transport for Cloudflare tunnel
+│   ├── orchestration/
+│   │   └── service_registry.py    # Centralized service access + event listeners
 │   ├── db/
 │   │   ├── __init__.py
-│   │   ├── supabase_client.py     # Supabase connection + query helpers
-│   │   └── migrations.sql         # Table creation SQL
-│   └── security/
+│   │   └── supabase_client.py     # Supabase connection + query helpers
+│   ├── security/
+│   │   ├── __init__.py
+│   │   ├── sanitizer.py           # Input sanitization + prompt injection detection
+│   │   ├── auth.py                # Telegram user ID + Twilio signature validation
+│   │   └── validators.py          # Pydantic validators, null checks, type guards
+│   ├── ui/
+│   │   └── desktop.py             # PySide6 desktop UI
+│   ├── vision/
+│   │   └── capture.py             # Screen/camera capture (macOS/Linux)
+│   └── utils/
 │       ├── __init__.py
-│       ├── sanitizer.py           # Input sanitization functions
-│       ├── auth.py                # Telegram user ID + Twilio signature validation
-│       └── validators.py          # Pydantic validators, null checks, type guards
+│       └── async_utils.py         # Async helpers
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py                # Shared fixtures, mocks, test config
-│   ├── unit/
-│   │   ├── __init__.py
+│   ├── unit/                      # 25 unit test files
 │   │   ├── test_calendar_service.py
 │   │   ├── test_email_service.py
 │   │   ├── test_task_service.py
 │   │   ├── test_note_service.py
 │   │   ├── test_weather_service.py
 │   │   ├── test_memory_service.py
+│   │   ├── test_message_processor.py
+│   │   ├── test_tool_registry.py
+│   │   ├── test_skill_loader.py
+│   │   ├── test_channel_manager.py
+│   │   ├── test_llm_providers.py
+│   │   ├── test_heartbeat.py
+│   │   ├── test_scheduler.py
 │   │   ├── test_settings.py
 │   │   ├── test_config_loader.py
 │   │   ├── test_sanitizer.py
 │   │   ├── test_validators.py
-│   │   └── test_command_parser.py
+│   │   ├── test_command_parser.py
+│   │   └── ...                    # + browser, cad, screen, voice, vision tests
 │   ├── integration/
-│   │   ├── __init__.py
 │   │   ├── test_google_calendar.py
 │   │   ├── test_gmail.py
 │   │   ├── test_twilio.py
 │   │   ├── test_elevenlabs.py
 │   │   ├── test_deepgram.py
 │   │   ├── test_supabase.py
-│   │   └── test_weather_api.py
+│   │   ├── test_weather_api.py
+│   │   └── test_ada_wiring.py     # ADA feature integration wiring
 │   ├── security/
-│   │   ├── __init__.py
 │   │   ├── test_prompt_injection.py
 │   │   ├── test_sql_injection.py
 │   │   ├── test_input_boundaries.py
 │   │   └── test_auth.py
 │   └── e2e/
-│       ├── __init__.py
 │       ├── test_telegram_text_flow.py
 │       ├── test_telegram_voice_flow.py
 │       ├── test_voice_call_flow.py
@@ -192,7 +265,8 @@ rafi_assistant/
 │       ├── test_settings_pipeline.py
 │       └── test_memory_recall.py
 └── scripts/
-    └── generate_deps.py
+    ├── generate_deps.py
+    └── google_integration_diagnose.py
 ```
 
 ### Features
@@ -262,6 +336,40 @@ rafi_assistant/
 - **Web Automation**: Autonomous browsing and information extraction using `Playwright`.
 - **Desktop Automation**: Local machine control (mouse/keyboard) via `pyautogui`.
 - **Voice Intelligence**: Integrated VAD (Voice Activity Detection) for hands-free interaction.
+
+#### 12. OpenClaw-Inspired 4-Pillar Architecture
+The assistant uses four core pillars as its architectural foundation:
+
+1. **Memory System** — Markdown files (`memory/SOUL.md`, `USER.md`, `MEMORY.md`, `AGENTS.md`, `HEARTBEAT.md`) as source of truth. `MemoryFileService` composes system prompts. Supabase pgvector serves as the search index. Automated memory promotion moves daily log insights to long-term memory.
+2. **Heartbeat** — `HeartbeatRunner` runs every 30 minutes via APScheduler. Gathers context (calendar, email, tasks, weather), evaluates with LLM, respects quiet hours, deduplicates alerts (24h window). Learning-based priority adjustment from user feedback.
+3. **Channel Adapters** — `ChannelAdapter` ABC normalizes all platforms to `ChannelMessage`. `MessageProcessor` provides shared LLM orchestration with ISC-driven task execution and verification. Implemented: Telegram, WhatsApp. Stubs: Slack, Discord.
+4. **Skills Registry** — `skills/*/SKILL.md` with YAML frontmatter declares tools, required env vars, and enabled state. `SkillLoader` discovers and filters by env vars. `ToolRegistry` provides dynamic dispatch.
+
+#### 13. ISC (Ideal State Criteria) Pipeline
+Inspired by the PAI Algorithm, the `MessageProcessor` follows:
+1. **Classify** — Detect if the message needs tool use (FULL mode) or is conversational (MINIMAL)
+2. **Generate ISC** — For FULL mode, generate binary-testable success criteria before executing
+3. **Execute** — Run tools against the criteria
+4. **Verify** — Check each criterion with evidence before responding
+5. **Learn** — Capture user satisfaction signals for continuous improvement
+
+#### 14. Learning System
+- Rating detection in user messages (explicit 1-10, implicit sentiment analysis)
+- Feedback stored in Supabase `feedback` table
+- Periodic analysis generates improvement insights
+- Insights feed back into system prompt as behavioral adjustments
+
+#### 15. MCP Server
+- Model Context Protocol server exposing tools via SSE transport
+- Accessible remotely via Cloudflare tunnel (`rafi.intentionai.ai/api/mcp/sse`)
+- Also supports local stdio transport for development
+- Configured via `.mcp.json` at project root
+
+#### 16. Multi-Provider LLM Orchestration
+- `LLMManager` wraps 4 providers: OpenAI, Anthropic (Claude), Groq, Google Gemini
+- Automatic failover: if primary provider fails, routes to next available
+- Cost-based routing for non-critical tasks
+- Providers with missing API keys silently skipped at startup
 
 ### Data Model (Supabase — one project per client)
 
@@ -336,6 +444,16 @@ Each client's Supabase project contains:
 | end_time | timestamptz | Event end |
 | reminded | boolean | Whether reminder was sent |
 | synced_at | timestamptz | Last sync time |
+
+#### Table: `feedback`
+| Column | Type | Description |
+|--------|------|-------------|
+| id | uuid (PK) | Auto-generated |
+| message_id | uuid | Reference to the message being rated |
+| rating | integer | Explicit rating (1-10) or derived from sentiment |
+| sentiment | text | "positive", "negative", "neutral" |
+| raw_text | text | Original user feedback text |
+| created_at | timestamptz | Auto-generated |
 
 **Disk storage**: Optional (disabled by default). When enabled via `save_to_disk: true`, call transcripts and logs are also written to `/data/logs/` inside the Docker container, mounted as a host volume.
 
@@ -896,51 +1014,42 @@ This script reads `requirements.txt` (or the installed environment) and outputs 
 ## Infrastructure
 
 ### AWS EC2
-- **Instance type**: t3.micro (free tier eligible)
-- **OS**: Ubuntu 22.04 LTS
+- **Instance**: `i-056d98e041c0bc01c` (t4g.small ARM64, us-east-2)
+- **OS**: Amazon Linux 2023 (user: `ec2-user`)
 - **Docker + Docker Compose** installed
-- **Nginx** as reverse proxy for Twilio webhooks (port 443 → container ports)
-- **Certbot** for SSL (Twilio requires HTTPS for webhooks)
+- **Cloudflare tunnel** routes `rafi.intentionai.ai` → EC2 containers (replaces Nginx + Certbot)
 - Security group: inbound 443 (HTTPS) + 22 (SSH) only
-- Upgradeable to larger instance as client count grows
+- systemd `rafi.service` auto-starts containers on reboot
+- Deploy key configured for `git pull` (no token needed)
 
 ### Docker Compose Structure
 ```yaml
 # docker-compose.yml on EC2
-version: "3.8"
-
 services:
-  client_john:
-    build: ./rafi_assistant
-    env_file: ./clients/john/.env
+  rafi:
+    build: .
+    env_file: .env
     volumes:
-      - ./clients/john/config.yaml:/app/config.yaml:ro
-      - ./clients/john/data:/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./memory:/app/memory
     restart: unless-stopped
     ports:
-      - "8001:8000"
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  client_jane:
-    build: ./rafi_assistant
-    env_file: ./clients/jane/.env
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run
     volumes:
-      - ./clients/jane/config.yaml:/app/config.yaml:ro
-      - ./clients/jane/data:/data
+      - ./cloudflared-config.yml:/etc/cloudflared/config.yml:ro
+      - ./cloudflared-credentials.json:/etc/cloudflared/credentials.json:ro
     restart: unless-stopped
-    ports:
-      - "8002:8000"
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
-      - client_john
-      - client_jane
-    restart: unless-stopped
+      - rafi
 ```
 
 ### Per-Client Resources
@@ -954,7 +1063,7 @@ services:
 
 | Service | Cost |
 |---------|------|
-| EC2 t3.micro | Free (first 12 months), then ~$8.50/month shared |
+| EC2 t4g.small | ~$15/month shared |
 | Supabase | Free tier (500MB DB, 1GB storage) |
 | Twilio phone number | ~$1.15/month + per-minute call charges |
 | ElevenLabs | Paid account (shared across clients) |
@@ -975,24 +1084,36 @@ services:
 
 ## Development Phases
 
-### Phase 1 (v1): rafi_assistant + rafi_deploy
-1. Set up EC2 instance with Docker, Nginx, SSL
-2. Build rafi_assistant core (Telegram bot + LLM integration)
-3. Add Google Calendar integration
-4. Add Gmail integration
-5. Add Twilio + ElevenLabs voice call pipeline
-6. Add Deepgram for Telegram voice message transcription
-7. Add tasks, notes, weather
-8. Add proactive calling (briefings, reminders, snooze)
-9. Add settings management (voice + text)
-10. Add semantic memory (Supabase + pgvector)
-11. Build rafi_deploy onboarding pipeline
-12. Build rafi_deploy automation scripts
-13. Security hardening + input sanitization
-14. Full test suite (unit, integration, security, e2e recursive)
-15. Generate DEPENDENCIES.md for both repos
+### Phase 1 (v1): rafi_assistant + rafi_deploy — COMPLETE
+1. ~~Set up EC2 instance with Docker, Cloudflare tunnel~~ Done (t4g.small ARM64, us-east-2)
+2. ~~Build rafi_assistant core (Telegram bot + LLM integration)~~ Done
+3. ~~Add Google Calendar integration~~ Done
+4. ~~Add Gmail integration~~ Done
+5. ~~Add Twilio + ElevenLabs voice call pipeline~~ Done
+6. ~~Add Deepgram for Telegram voice message transcription~~ Done
+7. ~~Add tasks, notes, weather~~ Done
+8. ~~Add proactive calling (briefings, reminders, snooze)~~ Done
+9. ~~Add settings management (voice + text)~~ Done
+10. ~~Add semantic memory (Supabase + pgvector)~~ Done
+11. ~~Build rafi_deploy onboarding pipeline~~ Done
+12. ~~Build rafi_deploy automation scripts~~ Done
+13. ~~Security hardening + input sanitization~~ Done
+14. ~~Full test suite (unit, integration, security, e2e recursive)~~ Done (55 test files)
+15. ~~Generate DEPENDENCIES.md for both repos~~ Done
 
-### Phase 2 (v2): rafi_vision
+### Phase 1.5: Intelligence Layer — COMPLETE
+1. ~~OpenClaw-inspired 4-pillar architecture (memory files, heartbeat, channels, skills)~~ Done
+2. ~~ISC (Ideal State Criteria) pipeline for task verification~~ Done
+3. ~~Learning system (user feedback capture + behavioral adjustments)~~ Done
+4. ~~Multi-provider LLM orchestration (OpenAI, Anthropic, Groq, Gemini)~~ Done
+5. ~~MCP server with SSE transport for remote access~~ Done
+6. ~~Channel adapter pattern (Telegram, WhatsApp active; Slack, Discord stubs)~~ Done
+7. ~~Memory promotion (daily logs → long-term memory)~~ Done
+8. ~~ADA-parity features (browser, screen, CAD, vision capture)~~ Done
+9. ~~Cloudflare tunnel replacing Nginx + Certbot~~ Done
+10. ~~Dashboard/observability endpoints~~ Done
+
+### Phase 2 (v2): rafi_vision — NOT STARTED
 1. Three.js 3D scene with glow/bloom shaders
 2. MediaPipe hand tracking integration
 3. Supabase data loading + embedding-based layout (UMAP dimensionality reduction)
