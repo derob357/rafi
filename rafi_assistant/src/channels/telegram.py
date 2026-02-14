@@ -64,12 +64,7 @@ class TelegramAdapter(ChannelAdapter):
         app = self._build_application()
         await app.initialize()
         await app.start()
-        await app.updater.start_polling(
-            drop_pending_updates=True,
-            read_timeout=30,
-            write_timeout=30,
-            pool_timeout=30,
-        )
+        await app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram adapter polling started")
 
     async def stop(self) -> None:
@@ -119,7 +114,16 @@ class TelegramAdapter(ChannelAdapter):
     # -- Internal helpers ----------------------------------------------------
 
     def _build_application(self) -> Application:
-        builder = Application.builder().token(self._config.telegram.bot_token)
+        builder = (
+            Application.builder()
+            .token(self._config.telegram.bot_token)
+            .read_timeout(30)
+            .write_timeout(30)
+            .pool_timeout(30)
+            .get_updates_read_timeout(30)
+            .get_updates_write_timeout(30)
+            .get_updates_pool_timeout(30)
+        )
         app = builder.build()
 
         app.add_handler(CommandHandler("start", self._handle_start))
