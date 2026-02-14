@@ -11,13 +11,36 @@ from src.llm.tool_definitions import ALL_TOOLS
 
 logger = logging.getLogger(__name__)
 
+
 class ConversationManager:
     """
     Orchestrates the voice interaction flow.
 
     Binds Deepgram (STT) and ElevenLabs (TTS/Agent) together,
     managing the listening state and broadcasting transcripts to the registry.
+
+    Echo prevention strategy:
+    - While Rafi is speaking, the mic feed to Deepgram is PAUSED so we never
+      transcribe our own output.
+    - Barge-in is detected via audio energy (RMS) in the audio callback.
+      If the energy exceeds a threshold during speech, we stop TTS, wait for
+      the echo to decay, then resume the Deepgram feed.
+    - After speech ends, a short cooldown prevents residual echo from being
+      processed.
     """
+
+    # Audio energy threshold for barge-in detection (RMS of int16 samples).
+    # Typical quiet room ~200-500, normal speech ~2000-5000.
+    BARGE_IN_RMS_THRESHOLD = 3000
+    # Number of consecutive high-energy frames needed to confirm barge-in
+    BARGE_IN_FRAME_COUNT = 3
+    # Seconds to wait after speech ends before sending audio to Deepgram
+    POST_SPEECH_SILENCE_SEC = 0.5
+    # Seconds to ignore transcripts after speech ends
+    POST_SPEECH_COOLDOWN_SEC = 2.0
+    # Echo token overlap threshold (lower = more aggressive echo rejection)
+    ECHO_TOKEN_THRESHOLD = 0.55
+
     def __init__(self, registry):
         self.registry = registry
         self.stt_api_key = registry.config.deepgram.api_key
@@ -26,17 +49,22 @@ class ConversationManager:
         self._is_speaking = False
         self._current_speech_text = None
         self._last_barge_in_time = 0
-        self._last_speech_end_time = 0  # To handle post-speech cooldown
-        self._speech_history = []        # To track recent responses for echo detection
+        self._last_speech_end_time = 0
+        self._speech_history = []
         self._dg_client = None
         self._dg_connection = None
         self._audio_stream = None
         self._loop = asyncio.get_event_loop()
-        self._process_lock = asyncio.Lock()  # Prevent concurrent processing of voice input
+        self._process_lock = asyncio.Lock()
+        self._current_process_task: asyncio.Task | None = None
         self._last_final_text = ""
         self._last_final_time = 0
-        self._min_barge_in_words = 1
-        self._echo_token_threshold = 0.85
+        self._min_barge_in_words = 2
+        # Counter for consecutive high-energy audio frames (barge-in detection)
+        self._high_energy_frames = 0
+        # Flag: True while we're in the post-speech silence window
+        # (mic is paused briefly so the speaker echo decays)
+        self._post_speech_pause = False
 
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -64,7 +92,7 @@ class ConversationManager:
         candidates = []
         if self._current_speech_text:
             candidates.append(self._current_speech_text)
-        candidates.extend(self._speech_history[-2:])
+        candidates.extend(self._speech_history[-3:])
 
         for candidate in candidates:
             candidate_norm = self._normalize_text(candidate)
@@ -74,7 +102,7 @@ class ConversationManager:
                 return True
             if len(normalized.split()) >= 3:
                 overlap = self._token_overlap_ratio(normalized, candidate_norm)
-                if overlap >= self._echo_token_threshold:
+                if overlap >= self.ECHO_TOKEN_THRESHOLD:
                     return True
         return False
 
@@ -85,12 +113,10 @@ class ConversationManager:
 
         self._is_listening = True
         logger.info("ConversationManager: Initializing STT stream...")
-        
+
         try:
             self._dg_client = AsyncDeepgramClient(api_key=self.stt_api_key)
-            
-            # Using the async with context manager for the connection
-            # Note: SDK 5.x uses strings for most options in the connect method
+
             self._dg_connection_context = self._dg_client.listen.v1.connect(
                 model="nova-2",
                 language="en",
@@ -101,88 +127,102 @@ class ConversationManager:
                 sample_rate="16000",
                 endpointing="300",
             )
-            
+
             self._dg_connection = await self._dg_connection_context.__aenter__()
 
             async def on_message(message, **kwargs):
                 if not isinstance(message, ListenV1ResultsEvent):
                     return
-                    
+
                 sentence = message.channel.alternatives[0].transcript
                 if not sentence or not sentence.strip():
                     return
-                
+
                 is_final = message.is_final
                 now = asyncio.get_event_loop().time()
 
-                # COOLDOWN: Reject transcripts right after we stop speaking,
-                # unless we just barged in (let the user finish their interruption).
-                recent_barge_in = now - self._last_barge_in_time < 1.0
-                if not self._is_speaking and not recent_barge_in and (now - self._last_speech_end_time < 1.0):
-                    logger.debug(f"Ignoring post-speech cooldown transcript: '{sentence}'")
-                    return
-
-                # BARGE-IN: If assistant is speaking and we detect non-empty transcript, stop playback immediately
-                if self._is_speaking:
-                    if len(sentence.split()) < self._min_barge_in_words:
-                        return
-
+                # POST-SPEECH COOLDOWN: Reject transcripts shortly after speaking
+                # to filter out residual echo that Deepgram may still be processing.
+                if not self._is_speaking and (now - self._last_speech_end_time < self.POST_SPEECH_COOLDOWN_SEC):
+                    # Allow through only if it's clearly NOT echo
                     if self._is_echo_text(sentence):
-                        logger.debug(f"Ignoring self-echo during playback: {sentence}")
+                        logger.debug("Ignoring post-speech echo transcript: '%s'", sentence)
                         return
 
-                    logger.info(f"Barge-in detected: interrupting playback for: '{sentence}'")
-                    self._last_barge_in_time = now
-                    await self.stop_speaking()
+                # While speaking, all transcripts should be paused by the audio
+                # callback (mic is muted). If one slips through, reject it.
+                if self._is_speaking:
+                    logger.debug("Ignoring transcript during speech: '%s'", sentence)
+                    return
 
                 # Broadcast the transcript to the UI
                 await self.registry.broadcast_transcript(sentence, is_final=is_final)
-                
+
                 if is_final:
                     # DEDUPLICATION: Deepgram sometimes sends multiple identical final results
-                    if sentence == self._last_final_text and (now - self._last_final_time < 1.0):
+                    if sentence == self._last_final_text and (now - self._last_final_time < 2.0):
+                        logger.debug("Ignoring duplicate final transcript: '%s'", sentence)
                         return
-                    
+
                     self._last_final_text = sentence
                     self._last_final_time = now
-                    
-                    logger.info(f"STT Final: {sentence}")
-                    # Trigger LLM processing for final sentences in background
-                    asyncio.create_task(self._process_user_input(sentence))
+
+                    logger.info("STT Final: %s", sentence)
+
+                    # Cancel any previous processing task — only the latest
+                    # user utterance should be processed.
+                    if self._current_process_task and not self._current_process_task.done():
+                        self._current_process_task.cancel()
+                    self._current_process_task = asyncio.create_task(
+                        self._process_user_input(sentence)
+                    )
 
             async def on_error(error, **kwargs):
-                logger.error(f"Deepgram Error: {error}")
+                logger.error("Deepgram Error: %s", error)
 
-            # Register handlers
             self._dg_connection.on(EventType.MESSAGE, on_message)
             self._dg_connection.on(EventType.ERROR, on_error)
 
-            # Start processing messages from the websocket in the background
             asyncio.create_task(self._dg_connection.start_listening())
 
-            # Start Microphone Stream
             def audio_callback(indata, frames, time, status):
                 if status:
-                    logger.warning(f"Audio stream status: {status}")
-                
-                # NOTE: We no longer return early when self._is_speaking is True
-                # to allow barge-in support. Software echo-detection in on_message
-                # handles the feedback prevention.
+                    logger.warning("Audio stream status: %s", status)
+
+                # While speaking or in post-speech pause, DON'T send audio to
+                # Deepgram.  This prevents the echo loop entirely.
+                if self._is_speaking or self._post_speech_pause:
+                    # Barge-in detection via audio energy:
+                    # If the user speaks loudly enough over Rafi's playback,
+                    # we detect it and stop TTS.
+                    if self._is_speaking:
+                        audio_data = np.frombuffer(indata, dtype=np.int16)
+                        rms = float(np.sqrt(np.mean(audio_data.astype(np.float32) ** 2)))
+                        if rms > self.BARGE_IN_RMS_THRESHOLD:
+                            self._high_energy_frames += 1
+                            if self._high_energy_frames >= self.BARGE_IN_FRAME_COUNT:
+                                logger.info("Barge-in detected via audio energy (RMS=%.0f)", rms)
+                                self._high_energy_frames = 0
+                                asyncio.run_coroutine_threadsafe(
+                                    self._handle_barge_in(), self._loop
+                                )
+                        else:
+                            self._high_energy_frames = 0
+                    return
 
                 if self._dg_connection:
-                    # Send bytes to Deepgram - converting CFFI buffer to bytes
                     asyncio.run_coroutine_threadsafe(
-                        self._dg_connection.send_media(bytes(indata)), 
-                        self._loop
+                        self._dg_connection.send_media(bytes(indata)),
+                        self._loop,
                     )
 
             self._audio_stream = sd.RawInputStream(
-                samplerate=16000, 
-                blocksize=2000, 
-                device=None, 
-                dtype='int16',
-                channels=1, 
-                callback=audio_callback
+                samplerate=16000,
+                blocksize=2000,
+                device=None,
+                dtype="int16",
+                channels=1,
+                callback=audio_callback,
             )
             self._audio_stream.start()
 
@@ -198,24 +238,36 @@ class ConversationManager:
     async def stop_listening(self):
         """Stop the microphone listener."""
         self._is_listening = False
-        
+
         if self._audio_stream:
             self._audio_stream.stop()
             self._audio_stream.close()
             self._audio_stream = None
-            
+
         if self._dg_connection:
             try:
-                # Exit the context manager to close the connection properly
                 await self._dg_connection_context.__aexit__(None, None, None)
             except Exception as e:
-                logger.error(f"Error closing Deepgram connection: {e}")
+                logger.error("Error closing Deepgram connection: %s", e)
             finally:
                 self._dg_connection = None
                 self._dg_connection_context = None
 
         logger.info("ConversationManager: Stopped listening")
         await self.registry.emit("voice", status="idle")
+
+    async def _handle_barge_in(self):
+        """Handle a barge-in event: stop speaking and cancel pending work."""
+        logger.info("Handling barge-in: stopping speech and cancelling pending tasks")
+        self._last_barge_in_time = asyncio.get_event_loop().time()
+
+        # Stop TTS playback
+        await self.stop_speaking()
+
+        # Cancel any pending LLM processing so the echo response doesn't play
+        if self._current_process_task and not self._current_process_task.done():
+            self._current_process_task.cancel()
+            self._current_process_task = None
 
     async def stop_speaking(self):
         """Stop current TTS playback for barge-in support."""
@@ -224,6 +276,12 @@ class ConversationManager:
             self._is_speaking = False
             self._last_speech_end_time = asyncio.get_event_loop().time()
             await self.registry.emit("voice", status="idle")
+
+            # Brief pause before resuming Deepgram feed so the speaker
+            # echo decays and doesn't get transcribed.
+            self._post_speech_pause = True
+            await asyncio.sleep(self.POST_SPEECH_SILENCE_SEC)
+            self._post_speech_pause = False
 
     async def process_text_input(self, text: str):
         """Process text input from the desktop UI (no TTS).
@@ -271,10 +329,8 @@ class ConversationManager:
                     response = followup.get("content")
 
             if response:
-                # Store assistant response in memory
                 if self.registry.memory:
                     await self.registry.memory.store_message(role="assistant", content=response, source="desktop_text")
-                # Broadcast with role so UI shows it as RAFI
                 await self.registry.transcript_queue.put({"text": response, "role": "assistant", "is_final": True})
             else:
                 await self.registry.transcript_queue.put({"text": "I'm not sure how to respond to that.", "role": "assistant", "is_final": True})
@@ -288,112 +344,111 @@ class ConversationManager:
         if not text.strip():
             return
 
-        async with self._process_lock:
-            # Re-check is_speaking inside lock, but only if not a barge-in
-            if self._is_speaking:
-                logger.debug("Still speaking, ignoring transcript for new process")
-                return
+        try:
+            async with self._process_lock:
+                # Re-check: if we started speaking since this task was queued, bail.
+                if self._is_speaking:
+                    logger.debug("Still speaking, skipping: '%s'", text)
+                    return
 
-            # MINIMUM WORD COUNT: Filter out fragments logic
-            words = text.split()
-            if len(words) < 2:
-                logger.debug(f"Ignoring single-word transcript fragment: '{text}'")
-                return
+                # MINIMUM WORD COUNT: Filter out fragments
+                words = text.split()
+                if len(words) < 2:
+                    logger.debug("Ignoring single-word transcript fragment: '%s'", text)
+                    return
 
-            # ECHO PROTECTION: Ignore assistant echo even if punctuation differs.
-            now = asyncio.get_event_loop().time()
-            if self._is_echo_text(text):
-                logger.info(f"Ignoring echo transcript: '{text}'")
-                return
+                # ECHO PROTECTION: Reject text that matches recent Rafi output
+                if self._is_echo_text(text):
+                    logger.info("Ignoring echo transcript: '%s'", text)
+                    return
 
-            if now - self._last_barge_in_time < 2.0 and self._is_echo_text(text):
-                logger.info(f"Ignoring echo transcript after barge-in: '{text}'")
-                return
+                logger.info("Processing voice input: %s", text)
 
-            logger.info(f"Processing voice input: {text}")
-            
-            # Store user message in memory
-            if self.registry.memory:
-                await self.registry.memory.store_message(role="user", content=text, source="desktop_voice")
+                # Store user message in memory
+                if self.registry.memory:
+                    await self.registry.memory.store_message(role="user", content=text, source="desktop_voice")
 
-            try:
-                # Inform the LLM about the voice context
+                # Get response from LLM
                 system_prompt = self.registry.config.elevenlabs.personality
-                voice_context = "\n\nNOTE: The user is speaking via microphone. You should be concise and conversational. Respond as if you can hear them perfectly."
-                
-                # Get response from LLM via registry
+                voice_context = (
+                    "\n\nNOTE: The user is speaking via microphone. Be concise "
+                    "and conversational. Respond as if you can hear them perfectly."
+                )
+
                 response_dict = await self.registry.llm.chat(
                     messages=[
                         {"role": "system", "content": system_prompt + voice_context},
-                        {"role": "user", "content": text}
+                        {"role": "user", "content": text},
                     ],
-                    tools=ALL_TOOLS
+                    tools=ALL_TOOLS,
                 )
-                
+
                 tool_calls = response_dict.get("tool_calls", [])
                 response = response_dict.get("content")
 
                 # Handle Tool Calls
                 if tool_calls:
-                    logger.info(f"LLM requested {len(tool_calls)} tool calls")
+                    logger.info("LLM requested %d tool calls", len(tool_calls))
                     result = None
                     for tc in tool_calls:
                         name = tc["function"]["name"]
                         args = json.loads(tc["function"]["arguments"])
-                        
-                        # Execute tool
                         result = await self.registry.tools.invoke(name, **args)
-                        
-                        # Store tool result in memory (optional, but good for context)
+
                         if self.registry.memory:
                             await self.registry.memory.store_message(
-                                role="system", 
-                                content=f"Tool {name} result: {result}", 
-                                source="system"
+                                role="system",
+                                content=f"Tool {name} result: {result}",
+                                source="system",
                             )
 
-                    # After tool execution, we might want to tell the user what happened
-                    # If there's no content, we trigger a second chat to summarize.
-                    # We pass the tool result in a way that doesn't violate OpenAI's 
-                    # requirement that tool_calls be followed by tool results.
-                    if not response:
+                    if not response and result is not None:
                         followup = await self.registry.llm.chat(
                             messages=[
-                                {"role": "system", "content": f"You just executed a tool: {name}. Results: {result}. Briefly summarize the outcome for a voice response."},
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        f"You just executed a tool: {name}. "
+                                        f"Results: {result}. "
+                                        "Briefly summarize the outcome for a voice response."
+                                    ),
+                                },
                                 {"role": "user", "content": text},
                             ]
                         )
                         response = followup.get("content")
 
                 if response:
-                    # Store assistant response in memory
                     if self.registry.memory:
-                        await self.registry.memory.store_message(role="assistant", content=response, source="desktop_voice")
-                    
+                        await self.registry.memory.store_message(
+                            role="assistant", content=response, source="desktop_voice"
+                        )
+
                     await self.registry.broadcast_transcript(response, is_final=True, role="assistant")
                     await self.speak(response)
-                    
-            except Exception as e:
-                logger.error(f"Error processing voice input: {e}")
+
+        except asyncio.CancelledError:
+            logger.info("Processing cancelled for: '%s'", text)
+        except Exception as e:
+            logger.error("Error processing voice input: %s", e)
 
     async def speak(self, text: str):
         """Generate speech from text via ElevenLabsAgent."""
         self._is_speaking = True
         self._current_speech_text = text
-        logger.info(f"ConversationManager speaking: {text}")
+        self._high_energy_frames = 0
+        logger.info("ConversationManager speaking: %s", text)
         await self.registry.emit("voice", status="speaking", text=text)
-        
+
         try:
-            # Call the actual ElevenLabs client
             if self.registry.elevenlabs:
                 await self.registry.elevenlabs.speak(text)
             else:
-                # Fallback to simulation
                 await asyncio.sleep(len(text) * 0.05)
+        except asyncio.CancelledError:
+            logger.info("Speech cancelled")
         except Exception as e:
-            logger.error(f"ElevenLabs TTS failed: {e}")
-            # Fallback to simulation
-            await asyncio.sleep(len(text) * 0.05)
+            logger.error("ElevenLabs TTS failed: %s", e)
         finally:
             self._is_speaking = False
             self._last_speech_end_time = asyncio.get_event_loop().time()
@@ -401,5 +456,11 @@ class ConversationManager:
             if len(self._speech_history) > 5:
                 self._speech_history.pop(0)
             self._current_speech_text = None
-            await self.registry.emit("voice", status="idle")
+            self._high_energy_frames = 0
 
+            # Brief pause before resuming mic feed so speaker echo decays
+            self._post_speech_pause = True
+            await asyncio.sleep(self.POST_SPEECH_SILENCE_SEC)
+            self._post_speech_pause = False
+
+            await self.registry.emit("voice", status="idle")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -44,14 +45,23 @@ class ElevenLabsAgent:
 
     async def stop(self) -> None:
         """Stop any ongoing audio playback."""
-        if self._playback_process:
+        proc = self._playback_process
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            # Give it a moment to exit; if it doesn't, force-kill.
             try:
-                self._playback_process.terminate()
-                logger.info("ElevenLabs playback stopped")
-            except Exception as e:
-                logger.error(f"Failed to stop ElevenLabs playback: {e}")
-            finally:
-                self._playback_process = None
+                await asyncio.wait_for(proc.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                proc.kill()
+            logger.info("ElevenLabs playback stopped")
+        except ProcessLookupError:
+            pass  # Already exited
+        except Exception as e:
+            logger.error("Failed to stop ElevenLabs playback: %s", e)
+        finally:
+            self._playback_process = None
 
     async def create_agent(self, webhook_url: str) -> str:
         """Create or update the ElevenLabs conversational agent.
@@ -146,7 +156,6 @@ class ElevenLabsAgent:
                 response.raise_for_status()
 
                 # On macOS, use afplay to play the audio stream
-                import asyncio
                 import tempfile
                 import os
                 

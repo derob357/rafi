@@ -33,7 +33,7 @@ class BrowserService:
             await self._playwright.stop()
         logger.info("BrowserService shutdown")
 
-    async def browse(self, url: str, action_prompt: str) -> Dict[str, Any]:
+    async def browse(self, url: str, action_prompt: str = "") -> Dict[str, Any]:
         """
         Navigate to a URL and perform a task.
         

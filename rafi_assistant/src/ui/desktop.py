@@ -75,10 +75,17 @@ class RafiVisualizer(QWidget):
     def set_intensity(self, value: float):
         self._intensity = max(0.0, min(1.0, value))
 
+    def stop(self):
+        """Stop the animation timer (call before shutdown)."""
+        self._timer.stop()
+
     # ── internals ───────────────────────────────────────────────────────
     def _tick(self):
-        self._time += 0.03
-        self.update()
+        try:
+            self._time += 0.03
+            self.update()
+        except Exception:
+            pass  # Never let exceptions leak into Qt timer dispatch
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -339,7 +346,17 @@ class MainWindow(QMainWindow):
         self.registry.register_listener("events", self._on_event_received)
 
         # Start background listener for registry events
-        asyncio.create_task(self.listen_to_registry())
+        self._listener_task = asyncio.create_task(self.listen_to_registry())
+
+    # ── lifecycle ─────────────────────────────────────────────────────
+    def closeEvent(self, event):
+        """Clean up timers and tasks before Qt destroys the window."""
+        # Stop the visualizer animation timer
+        self.visualizer.stop()
+        # Cancel the async listener task
+        if hasattr(self, "_listener_task") and not self._listener_task.done():
+            self._listener_task.cancel()
+        super().closeEvent(event)
 
     # ── badge helpers ───────────────────────────────────────────────────
     def _set_badge_idle(self):
