@@ -73,10 +73,10 @@ Inspired by PAI's Algorithm, the `MessageProcessor` now follows:
 # Install dependencies
 pip install -r rafi_assistant/requirements.txt
 
-# Run locally
+# Run locally (IMPORTANT: stop EC2 instance first to avoid Telegram 409 conflicts)
 RAFI_CONFIG_PATH=./config.yaml uvicorn src.main:app --host 0.0.0.0 --port 8000
 
-# Docker
+# Docker (local)
 cd rafi_assistant && docker build -t rafi_assistant . && docker-compose up
 
 # Tests
@@ -86,6 +86,33 @@ pytest tests/security/ -m security -v
 pytest tests/integration/ -m integration -v
 pytest --cov=src --cov-report=html
 ```
+
+## EC2 Deployment (Production)
+
+Rafi runs 24/7 on AWS EC2 (`i-056d98e041c0bc01c`, t4g.small ARM64, us-east-2).
+Cloudflare tunnel routes `rafi.intentionai.ai` to the EC2 containers.
+
+```bash
+# SSH into EC2
+ssh -i ~/.ssh/rafi-key.pem ec2-user@18.119.109.47
+
+# Update after pushing to GitHub
+ssh -i ~/.ssh/rafi-key.pem ec2-user@18.119.109.47
+cd ~/rafi/rafi_assistant && git pull && docker compose build && docker compose up -d
+
+# Check health
+curl https://rafi.intentionai.ai/health
+
+# View logs
+ssh -i ~/.ssh/rafi-key.pem ec2-user@18.119.109.47 \
+  "cd ~/rafi/rafi_assistant && docker compose logs --tail 50 rafi"
+```
+
+**Key details:**
+- Deploy key configured for `git pull` (no token needed)
+- Secrets (`.env`, `config.yaml`) live on EC2 only, not in the repo
+- systemd `rafi.service` auto-starts containers on EC2 reboot
+- **Never run a local instance while EC2 is active** — duplicate Telegram polling causes 409 Conflicts
 
 ## Key Patterns
 
