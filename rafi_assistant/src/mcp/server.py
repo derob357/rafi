@@ -294,16 +294,16 @@ class MCPServer:
 async def main() -> None:
     """Run the MCP server on stdio."""
     server = MCPServer()
+    loop = asyncio.get_event_loop()
 
-    # Read from stdin, write to stdout
+    # Set up async stdin reader
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
-    await asyncio.get_event_loop().connect_read_pipe(lambda: protocol, sys.stdin)
+    await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
 
-    writer_transport, writer_protocol = await asyncio.get_event_loop().connect_write_pipe(
-        asyncio.streams.FlowControlMixin, sys.stdout
-    )
-    writer = asyncio.StreamWriter(writer_transport, writer_protocol, reader, asyncio.get_event_loop())
+    # Use synchronous stdout writes (simpler and more reliable than
+    # connect_write_pipe which fails on non-pipe file descriptors)
+    stdout = sys.stdout.buffer
 
     logger.info("Rafi MCP server started on stdio")
 
@@ -327,9 +327,8 @@ async def main() -> None:
                     message = json.loads(line)
                     response = await server.handle_message(message)
                     if response is not None:
-                        response_bytes = json.dumps(response).encode() + b"\n"
-                        writer.write(response_bytes)
-                        await writer.drain()
+                        stdout.write(json.dumps(response).encode() + b"\n")
+                        stdout.flush()
                 except json.JSONDecodeError:
                     logger.warning("Invalid JSON received: %s", line[:100])
 

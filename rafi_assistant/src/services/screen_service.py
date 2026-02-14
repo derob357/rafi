@@ -16,8 +16,8 @@ class ScreenService:
             import pyautogui
             # Fail-safe: move mouse to corner to abort
             pyautogui.FAILSAFE = True
-        except ImportError:
-            logger.warning("pyautogui not installed. Screen control will be unavailable.")
+        except (ImportError, KeyError, OSError):
+            logger.warning("pyautogui unavailable (no display or not installed). Screen control disabled.")
 
     async def move_mouse(self, x: int, y: int) -> Dict[str, Any]:
         """Move mouse to specific coordinates."""

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(BASE_DIR / ".env", override=False)
 
 SKIP_REASON = "Supabase integration tests require live credentials"
-HAS_CREDENTIALS = bool(os.environ.get("TEST_SUPABASE_URL"))
+HAS_CREDENTIALS = bool(
+    os.environ.get("TEST_SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+)
 
 
 @pytest.mark.integration
@@ -16,17 +23,17 @@ class TestSupabaseIntegration:
     """Integration tests against live Supabase instance."""
 
     @pytest.fixture(autouse=True)
-    def setup_client(self) -> None:
+    async def setup_client(self) -> None:
         from src.db.supabase_client import SupabaseClient
-
         from src.config.loader import SupabaseConfig
 
         config = SupabaseConfig(
-            url=os.environ.get("TEST_SUPABASE_URL", "https://placeholder.supabase.co"),
-            anon_key=os.environ.get("TEST_SUPABASE_ANON_KEY", "placeholder"),
-            service_role_key=os.environ.get("TEST_SUPABASE_KEY", "placeholder"),
+            url=os.environ.get("TEST_SUPABASE_URL") or os.environ.get("SUPABASE_URL", ""),
+            anon_key=os.environ.get("TEST_SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_ANON_KEY", ""),
+            service_role_key=os.environ.get("TEST_SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
         )
         self.client = SupabaseClient(config=config)
+        await self.client.initialize()
 
     @pytest.mark.asyncio
     async def test_insert_and_select_task(self) -> None:
@@ -37,7 +44,7 @@ class TestSupabaseIntegration:
             "status": "pending",
         })
         assert result is not None
-        task_id = result[0]["id"] if result else None
+        task_id = result["id"]
         assert task_id is not None
 
         # Select
@@ -46,7 +53,7 @@ class TestSupabaseIntegration:
         assert tasks[0]["title"] == "Integration test task"
 
         # Cleanup
-        await self.client.delete("tasks", record_id=task_id)
+        await self.client.delete("tasks", filters={"id": task_id})
 
     @pytest.mark.asyncio
     async def test_update_task(self) -> None:
@@ -54,24 +61,29 @@ class TestSupabaseIntegration:
             "title": "Update test",
             "status": "pending",
         })
-        task_id = result[0]["id"] if result else None
+        assert result is not None
+        task_id = result["id"]
 
-        await self.client.update("tasks", record_id=task_id, data={
+        await self.client.update("tasks", filters={"id": task_id}, data={
             "status": "completed",
         })
 
         updated = await self.client.select("tasks", filters={"id": task_id})
         assert updated[0]["status"] == "completed"
 
-        await self.client.delete("tasks", record_id=task_id)
+        await self.client.delete("tasks", filters={"id": task_id})
 
     @pytest.mark.asyncio
     async def test_embedding_search(self) -> None:
         """Test pgvector similarity search."""
-        # This test requires messages with embeddings in the test database
         results = await self.client.embedding_search(
-            table="messages",
-            query_embedding=[0.1] * 3072,
-            limit=5,
+            query_embedding=[0.1] * 1536,
+            match_count=5,
         )
+        assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_feedback_table_accessible(self) -> None:
+        """Test that the feedback table exists and is queryable."""
+        results = await self.client.select("feedback", limit=1)
         assert isinstance(results, list)

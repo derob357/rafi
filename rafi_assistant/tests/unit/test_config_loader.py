@@ -28,7 +28,20 @@ from src.config.loader import (
     TelegramConfig,
     TwilioConfig,
     load_config,
+    _ENV_OVERRIDES,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove env vars that load_config merges on top of YAML values.
+
+    Integration tests may load .env at collection time, polluting the
+    process environment.  This ensures config loader unit tests see only
+    the values from the YAML file they explicitly write.
+    """
+    for env_var in _ENV_OVERRIDES:
+        monkeypatch.delenv(env_var, raising=False)
 
 
 # ---------------------------------------------------------------------------

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(BASE_DIR / ".env", override=False)
 
 SKIP_REASON = "Weather API integration tests require live credentials"
-HAS_CREDENTIALS = bool(os.environ.get("WEATHER_TEST_API_KEY"))
+HAS_CREDENTIALS = bool(
+    os.environ.get("WEATHER_TEST_API_KEY") or os.environ.get("WEATHER_API_KEY")
+)
 
 
 @pytest.mark.integration
@@ -17,13 +24,11 @@ class TestWeatherAPIIntegration:
 
     @pytest.fixture(autouse=True)
     def setup_service(self) -> None:
-        from unittest.mock import AsyncMock
         from src.services.weather_service import WeatherService
-
         from src.config.loader import WeatherConfig
 
         config = WeatherConfig(
-            api_key=os.environ.get("WEATHER_TEST_API_KEY", "placeholder"),
+            api_key=os.environ.get("WEATHER_TEST_API_KEY") or os.environ.get("WEATHER_API_KEY", ""),
         )
         self.service = WeatherService(config=config)
 

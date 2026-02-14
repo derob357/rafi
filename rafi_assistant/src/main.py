@@ -45,8 +45,15 @@ from src.voice.twilio_handler import TwilioHandler
 from src.voice.elevenlabs_agent import ElevenLabsAgent
 from src.voice.deepgram_stt import DeepgramSTT
 from src.orchestration.service_registry import ServiceRegistry
-from src.voice.conversation_manager import ConversationManager
-from src.vision.capture import CaptureDispatcher
+try:
+    from src.voice.conversation_manager import ConversationManager
+except OSError:
+    ConversationManager = None  # type: ignore[assignment,misc]
+
+try:
+    from src.vision.capture import CaptureDispatcher
+except (OSError, Exception):
+    CaptureDispatcher = None  # type: ignore[assignment,misc]
 from src.tools.tool_registry import ToolRegistry
 from src.llm.tool_definitions import TOOL_SCHEMA_MAP
 from src.skills.loader import (
@@ -226,9 +233,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         screen=screen_service
     )
 
-    # Initialize ADA-parity managers
-    registry.conversation = ConversationManager(registry)
-    registry.vision = CaptureDispatcher(registry)
+    # Initialize ADA-parity managers (skip if deps unavailable in headless env)
+    if ConversationManager is not None:
+        registry.conversation = ConversationManager(registry)
+    else:
+        logger.warning("ConversationManager unavailable (PortAudio not found), skipping voice")
+    if CaptureDispatcher is not None:
+        try:
+            registry.vision = CaptureDispatcher(registry)
+        except Exception as e:
+            logger.warning("CaptureDispatcher init failed (%s), skipping vision", e)
+    else:
+        logger.warning("CaptureDispatcher unavailable (no display), skipping vision")
     registry.tools = ToolRegistry(registry)
 
     # -- Tool wrapper functions ------------------------------------------------
