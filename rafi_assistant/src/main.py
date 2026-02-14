@@ -626,6 +626,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         learning_service=learning_service,
     )
 
+    app.state.processor = processor
+
     # Channel adapters
     telegram_adapter = TelegramAdapter(
         config=_config,

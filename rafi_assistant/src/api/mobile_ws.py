@@ -1,21 +1,23 @@
 """Mobile companion WebSocket endpoint.
 
 Provides a bidirectional channel between the mobile web UI and Rafi's
-ServiceRegistry.  The client sends gesture events, text commands, and
-optional camera frames; the server pushes transcript updates and
-visualizer state.
+ServiceRegistry.  The client sends gesture events, voice transcriptions,
+text commands, and optional camera frames; the server pushes transcript
+updates, TTS audio, and visualizer state.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import secrets
 import time
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
+from src.channels.base import ChannelMessage
 from src.vision.gesture import GestureActionMapper
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,7 @@ async def mobile_websocket(
     await websocket.accept()
 
     registry = getattr(websocket.app.state, "registry", None)
+    processor = getattr(websocket.app.state, "processor", None)
     send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
     # ── Registry listeners (forwarded to client) ──────────────────────────
@@ -107,7 +110,9 @@ async def mobile_websocket(
         async def _receiver() -> None:
             while True:
                 data = await websocket.receive_json()
-                await _handle_client_message(data, registry, websocket)
+                await _handle_client_message(
+                    data, registry, processor, websocket, send_queue
+                )
 
         sender_task = asyncio.create_task(_sender())
         receiver_task = asyncio.create_task(_receiver())
@@ -130,13 +135,77 @@ async def mobile_websocket(
             registry.unregister_listener("events", _on_event)
 
 
+# ── TTS helper ────────────────────────────────────────────────────────────────
+
+
+async def _generate_tts(text: str, registry: Any) -> Optional[bytes]:
+    """Generate TTS audio via ElevenLabs and return MP3 bytes."""
+    agent = getattr(registry, "elevenlabs", None) if registry else None
+    if not agent:
+        return None
+    try:
+        return await agent.synthesize(text)
+    except Exception as exc:
+        logger.warning("TTS generation failed: %s", exc)
+        return None
+
+
+async def _respond_with_tts(
+    response_text: str,
+    registry: Any,
+    send_queue: asyncio.Queue,
+) -> None:
+    """Send assistant transcript + TTS audio to the mobile client."""
+    # Push text immediately so the user sees it while TTS generates
+    await send_queue.put(
+        {
+            "type": "transcript",
+            "text": response_text,
+            "role": "assistant",
+            "is_final": True,
+        }
+    )
+
+    # Generate and send TTS audio
+    audio_bytes = await _generate_tts(response_text, registry)
+    if audio_bytes:
+        await send_queue.put(
+            {"type": "audio", "data": base64.b64encode(audio_bytes).decode()}
+        )
+
+
 # ── Client message handling ───────────────────────────────────────────────────
+
+
+async def _process_user_text(
+    text: str,
+    registry: Any,
+    processor: Any,
+    send_queue: asyncio.Queue,
+) -> None:
+    """Run user text through MessageProcessor and reply with TTS."""
+    if not text:
+        return
+
+    if processor:
+        msg = ChannelMessage(channel="mobile", sender_id="mobile_user", text=text)
+        try:
+            response = await processor.process(msg)
+        except Exception as exc:
+            logger.error("MessageProcessor error: %s", exc)
+            response = "Sorry, something went wrong processing your request."
+        await _respond_with_tts(response, registry, send_queue)
+    elif registry and registry.conversation:
+        # Fallback to ConversationManager (local dev with desktop UI)
+        await registry.conversation.process_text_input(text)
 
 
 async def _handle_client_message(
     data: dict[str, Any],
     registry: Any,
+    processor: Any,
     websocket: WebSocket,
+    send_queue: asyncio.Queue,
 ) -> None:
     msg_type = data.get("type", "")
 
@@ -155,21 +224,26 @@ async def _handle_client_message(
                     "label": action["label"],
                 }
             )
-            # If the gesture maps to a text command, route through conversation
-            if registry and action.get("text_command") and registry.conversation:
-                await registry.conversation.process_text_input(action["text_command"])
+            # If the gesture maps to a text command, process it
+            if action.get("text_command"):
+                await _process_user_text(
+                    action["text_command"], registry, processor, send_queue
+                )
+
+    elif msg_type == "voice_text":
+        # Speech-to-text result from browser Web Speech API
+        text = data.get("text", "").strip()
+        logger.info("Voice input: %s", text[:100])
+        await _process_user_text(text, registry, processor, send_queue)
 
     elif msg_type == "text":
         message = data.get("message", "").strip()
-        if message and registry and registry.conversation:
-            await registry.conversation.process_text_input(message)
+        await _process_user_text(message, registry, processor, send_queue)
 
     elif msg_type == "frame":
         # Optional: receive camera frames from the phone for Rafi's vision
         jpeg_b64 = data.get("jpeg", "")
         if jpeg_b64 and registry:
-            import base64
-
             try:
                 jpeg_bytes = base64.b64decode(jpeg_b64)
                 await registry.broadcast_event(

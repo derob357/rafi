@@ -30,6 +30,10 @@ let visualizerIntensity = 0;
 let visualizerTime = 0;
 let lastGestureTime = 0;
 let animFrameId = null;
+let micActive = false;
+let recognition = null;
+let audioQueue = [];
+let audioPlaying = false;
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 
@@ -41,6 +45,7 @@ const camSection   = document.getElementById('camera-section');
 const camPreview   = document.getElementById('camera-preview');
 const gestCanvas   = document.getElementById('gesture-canvas');
 const gestLabel    = document.getElementById('gesture-label');
+const micBtn       = document.getElementById('mic-btn');
 const cameraBtn    = document.getElementById('camera-btn');
 const textInput    = document.getElementById('text-input');
 
@@ -92,6 +97,9 @@ function handleServerMessage(data) {
         case 'visualizer':
             visualizerActive    = data.active;
             visualizerIntensity = data.intensity || 0;
+            break;
+        case 'audio':
+            enqueueAudio(data.data);
             break;
         case 'connected':
             appendTranscript('system', 'Connected to Rafi');
@@ -386,6 +394,137 @@ function drawVisualizer() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Microphone & Speech Recognition (Web Speech API)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function toggleMic() {
+    if (micActive) {
+        stopListening();
+    } else {
+        startListening();
+    }
+}
+
+function startListening() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        appendTranscript('system', 'Speech recognition not supported in this browser');
+        return;
+    }
+
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event) => {
+        let finalText = '';
+        let interimText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+            const t = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                finalText += t;
+            } else {
+                interimText += t;
+            }
+        }
+
+        if (interimText) {
+            appendTranscript('user', interimText, false);
+        }
+
+        if (finalText) {
+            appendTranscript('user', finalText, true);
+            send({ type: 'voice_text', text: finalText });
+        }
+    };
+
+    recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error === 'not-allowed') {
+            appendTranscript('system', 'Microphone access denied');
+            micActive = false;
+            micBtn.classList.remove('active');
+            voiceBadge.textContent = 'CONNECTED';
+            voiceBadge.className = 'badge connected';
+        }
+    };
+
+    recognition.onend = () => {
+        // Auto-restart if mic is still active (browser may stop on silence)
+        if (micActive) {
+            try { recognition.start(); }
+            catch (_) { /* already started */ }
+        }
+    };
+
+    try {
+        recognition.start();
+        micActive = true;
+        micBtn.classList.add('active');
+        voiceBadge.textContent = 'LISTENING';
+        voiceBadge.className = 'badge listening';
+        appendTranscript('system', 'Listening...');
+    } catch (err) {
+        console.error('Failed to start speech recognition:', err);
+    }
+}
+
+function stopListening() {
+    micActive = false;
+    if (recognition) {
+        recognition.stop();
+        recognition = null;
+    }
+    micBtn.classList.remove('active');
+    voiceBadge.textContent = 'CONNECTED';
+    voiceBadge.className = 'badge connected';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Audio Playback (TTS from server)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function enqueueAudio(base64Data) {
+    audioQueue.push(base64Data);
+    if (!audioPlaying) playNextAudio();
+}
+
+function playNextAudio() {
+    if (audioQueue.length === 0) {
+        audioPlaying = false;
+        visualizerActive = false;
+        return;
+    }
+
+    audioPlaying = true;
+    visualizerActive = true;
+    visualizerIntensity = 0.6;
+
+    const b64 = audioQueue.shift();
+    const audio = new Audio(`data:audio/mpeg;base64,${b64}`);
+
+    audio.onended = () => {
+        visualizerIntensity = 0;
+        playNextAudio();
+    };
+
+    audio.onerror = () => {
+        console.error('Audio playback failed');
+        playNextAudio();
+    };
+
+    audio.play().catch((err) => {
+        console.error('Audio play blocked:', err);
+        // Browsers may block autoplay — show a hint
+        appendTranscript('system', 'Tap the screen to enable audio playback');
+        audioPlaying = false;
+        visualizerActive = false;
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Text Input
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -403,6 +542,7 @@ textInput.addEventListener('keydown', (e) => {
 // Button Handlers
 // ═══════════════════════════════════════════════════════════════════════════════
 
+micBtn.addEventListener('click', toggleMic);
 cameraBtn.addEventListener('click', toggleCamera);
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -150,6 +150,42 @@ class ElevenLabsAgent:
             logger.exception("Unexpected error creating ElevenLabs agent: %s", str(e))
             raise
 
+    async def synthesize(self, text: str) -> Optional[bytes]:
+        """Convert text to speech and return MP3 audio bytes.
+
+        Unlike :meth:`speak`, this does **not** play the audio locally —
+        it returns the raw bytes so callers (e.g. the mobile companion
+        WebSocket) can stream them to a remote client.
+
+        Returns:
+            MP3 audio bytes, or ``None`` on failure.
+        """
+        if not text:
+            return None
+
+        headers = {
+            "xi-api-key": self._api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "text": text,
+            "model_id": "eleven_monolingual_v1",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.5},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self._base_url}/text-to-speech/{self._voice_id}",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                return response.content
+        except Exception as e:
+            logger.error("ElevenLabs synthesize failed: %s", e)
+            return None
+
     async def speak(self, text: str) -> bool:
         """Convert text to speech and play it locally."""
         if not text:

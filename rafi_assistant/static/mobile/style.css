@@ -92,6 +92,17 @@ header {
     color: var(--accent-cyan);
 }
 
+.badge.listening {
+    border-color: #ff4444;
+    color: #ff4444;
+    animation: listenPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes listenPulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.5; }
+}
+
 /* ── Main Content ───────────────────────────────── */
 
 main {
