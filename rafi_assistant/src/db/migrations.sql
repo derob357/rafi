@@ -198,8 +198,8 @@ BEGIN
         m.content,
         m.source,
         m.created_at,
-        1 - (m.embedding <=> query_embedding) AS similarity,
-        ts_rank_cd(to_tsvector('english', m.content), plainto_tsquery('english', query_text)) AS rank
+        (1 - (m.embedding <=> query_embedding))::double precision AS similarity,
+        ts_rank_cd(to_tsvector('english', m.content), plainto_tsquery('english', query_text))::double precision AS rank
     FROM messages m
     WHERE m.embedding IS NOT NULL
         AND (

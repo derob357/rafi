@@ -8,7 +8,6 @@ Loads config, initializes all services, starts:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
@@ -21,7 +20,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response
 
 from src.config.loader import load_config, AppConfig
-from src.bot.telegram_bot import TelegramBot
 from src.channels.processor import MessageProcessor
 from src.channels.telegram import TelegramAdapter
 from src.channels.whatsapp import WhatsAppAdapter
@@ -76,7 +74,6 @@ logger = logging.getLogger(__name__)
 
 # Global service references
 _config: AppConfig | None = None
-_telegram_bot: TelegramBot | None = None
 _channel_manager: ChannelManager | None = None
 _scheduler: RafiScheduler | None = None
 
@@ -114,7 +111,7 @@ def _create_llm_manager(config: AppConfig) -> LLMManager:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown."""
-    global _config, _telegram_bot, _channel_manager, _scheduler
+    global _config, _channel_manager, _scheduler
 
     config_path = os.environ.get("RAFI_CONFIG_PATH", "/app/config.yaml")
     logger.info("Loading config from: %s", config_path)
@@ -494,8 +491,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Create Telegram send helper for scheduler fallback
     async def send_telegram_message(text: str) -> None:
-        if _telegram_bot:
-            await _telegram_bot.send_message(text)
+        if _channel_manager:
+            await _channel_manager.send_to_preferred(text)
 
     # Initialize scheduler
     _scheduler = RafiScheduler(_config)
@@ -554,18 +551,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.channel_manager = _channel_manager
     app.state.whatsapp_adapter = whatsapp_adapter
 
-    # Legacy TelegramBot (kept for backward-compatible send_message used by scheduler)
-    _telegram_bot = TelegramBot(
-        config=_config,
-        db=db,
-        llm=llm,
-        llm_manager=llm,
-        memory=memory_service,
-        memory_files=memory_files,
-        tool_registry=registry.tools,
-        deepgram_stt=deepgram_stt,
-    )
-
     # -- Heartbeat runner -----------------------------------------------------
     heartbeat = HeartbeatRunner(
         config=_config,
@@ -601,9 +586,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Start channels (Telegram polling, WhatsApp client init)
     await _channel_manager.start_all()
-
-    # Also start legacy TelegramBot for scheduler's send_message fallback
-    bot_task = asyncio.create_task(_telegram_bot.start())
     logger.info("Rafi Assistant started for client: %s", _config.client.name)
 
     yield
@@ -613,13 +595,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await browser_service.shutdown()
     if _channel_manager:
         await _channel_manager.stop_all()
-    if _telegram_bot:
-        await _telegram_bot.stop()
     if _scheduler:
         _scheduler.stop()
     await weather_service.close()
     await llm.close()
-    bot_task.cancel()
     logger.info("Shutdown complete")
 
 
