@@ -9,7 +9,7 @@
       }
     },
     "rafi-remote": {
-      "url": "https://your-tunnel-url.trycloudflare.com/api/mcp/sse",
+      "url": "https://rafi.intentionai.ai/api/mcp/sse",
       "transport": "sse",
       "headers": {
         "Authorization": "Bearer ${MCP_AUTH_TOKEN}"

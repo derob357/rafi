@@ -1,0 +1,6 @@
+tunnel: c7d14d1e-87c6-45f8-81d1-9b57a0a16a1e
+
+ingress:
+  - hostname: rafi.intentionai.ai
+    service: http://rafi:8000
+  - service: http_status:404

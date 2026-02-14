@@ -213,7 +213,11 @@ async def sse_endpoint(request: Request) -> StreamingResponse:
     """Create an SSE session and stream responses back to the client."""
     session = _session_manager.create(request.app.state)
 
-    post_url = str(request.url_for("mcp_messages")) + f"?sessionId={session.session_id}"
+    base_url = str(request.url_for("mcp_messages"))
+    # Respect X-Forwarded-Proto from reverse proxies (e.g. Cloudflare tunnel)
+    if request.headers.get("x-forwarded-proto") == "https" and base_url.startswith("http://"):
+        base_url = "https://" + base_url[7:]
+    post_url = base_url + f"?sessionId={session.session_id}"
 
     async def event_stream():
         try:

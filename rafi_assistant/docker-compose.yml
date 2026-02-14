@@ -26,10 +26,12 @@ services:
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
+    command: tunnel --no-autoupdate --protocol http2 --config /etc/cloudflared/config.yml run
     env_file: .env
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    volumes:
+      - ./cloudflared-config.yml:/etc/cloudflared/config.yml:ro
     networks:
       - rafi-network
     depends_on:
