@@ -578,6 +578,43 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Vault path not found, vault tools skipped: %s", vault_root)
 
+    # Claude Code Agent — registered directly if ANTHROPIC_API_KEY is set
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        async def _claude_code(task: str, working_directory: str = "") -> str:
+            from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+
+            cwd = working_directory or (
+                str(vault_root) if vault_root.is_dir() else str(Path.home())
+            )
+            options = ClaudeAgentOptions(
+                allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+                max_turns=15,
+                permission_mode="acceptEdits",
+                cwd=cwd,
+            )
+
+            output_parts: list[str] = []
+            try:
+                async for message in query(prompt=task, options=options):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                output_parts.append(block.text)
+            except Exception as exc:
+                logger.error("Claude Code agent error: %s", exc)
+                return f"Agent error: {exc}"
+
+            return "\n".join(output_parts) if output_parts else "Agent completed with no text output."
+
+        tool_reg.register_tool(
+            "claude_code", _claude_code,
+            "Run a Claude Code agent for complex multi-step tasks",
+            schema=TOOL_SCHEMA_MAP.get("claude_code"),
+        )
+        logger.info("Claude Code agent tool registered")
+    else:
+        logger.info("Claude Code agent tool skipped (no ANTHROPIC_API_KEY)")
+
     enabled_tool_names = sorted(tool_reg.tool_names)
     logger.info(
         "Enabled tools after skill gating (%d): %s",

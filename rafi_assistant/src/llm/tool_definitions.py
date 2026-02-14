@@ -792,6 +792,43 @@ VAULT_TOOLS: list[dict[str, Any]] = [
     WRITE_VAULT_FILE_TOOL,
 ]
 
+# ── Claude Code Agent ────────────────────────────────────────────────────────
+
+CLAUDE_CODE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "claude_code",
+        "description": (
+            "Delegate a complex multi-step task to a Claude Code agent. "
+            "The agent can read, write, and edit files, run shell commands, "
+            "and search codebases autonomously. Use for tasks that require "
+            "multiple steps such as writing scripts, refactoring code, "
+            "generating reports from files, or any task needing file I/O."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "A clear description of what the agent should accomplish.",
+                },
+                "working_directory": {
+                    "type": "string",
+                    "description": (
+                        "Directory for the agent to work in. "
+                        "Defaults to the Obsidian vault or home directory."
+                    ),
+                },
+            },
+            "required": ["task"],
+        },
+    },
+}
+
+AGENT_TOOLS: list[dict[str, Any]] = [
+    CLAUDE_CODE_TOOL,
+]
+
 ALL_TOOLS: list[dict[str, Any]] = (
     CALENDAR_TOOLS
     + EMAIL_TOOLS
@@ -802,6 +839,7 @@ ALL_TOOLS: list[dict[str, Any]] = (
     + MEMORY_TOOLS
     + ADA_V2_TOOLS
     + VAULT_TOOLS
+    + AGENT_TOOLS
 )
 
 
