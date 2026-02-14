@@ -106,15 +106,18 @@ class MemoryService:
         self,
         query: str,
         limit: int = 5,
+        min_score: float = 0.35,
     ) -> list[dict[str, Any]]:
         """Search conversation history using hybrid search.
 
         Combines pgvector cosine similarity with PostgreSQL full-text search
-        to find the most relevant past messages.
+        to find the most relevant past messages. Results below min_score
+        are filtered out (OpenClaw-style threshold).
 
         Args:
             query: Natural language search query.
             limit: Maximum number of results (default 5).
+            min_score: Minimum similarity score threshold (default 0.35).
 
         Returns:
             List of matching message dicts with similarity scores.
@@ -129,29 +132,38 @@ class MemoryService:
             logger.warning("Failed to embed search query, falling back to text search: %s", e)
             return await self._text_search_fallback(query, limit)
 
-        # Hybrid search via RPC
+        # Hybrid search via RPC — fetch extra candidates for score filtering
+        candidate_count = limit * 4
         results = await await_if_needed(
             self._db.rpc(
                 "hybrid_search_messages",
                 {
                     "query_embedding": query_embedding,
                     "query_text": query,
-                    "match_count": limit,
-                    "match_threshold": 0.5,
+                    "match_count": candidate_count,
+                    "match_threshold": min_score,
                 },
             )
         )
 
         if results and isinstance(results, list):
-            logger.info("Memory search returned %d results for query: %s", len(results), query[:50])
-            return results
+            # Filter by min_score and truncate to limit
+            filtered = [
+                r for r in results
+                if r.get("similarity", 0) >= min_score
+            ][:limit]
+            logger.info(
+                "Memory search: %d candidates -> %d results (min_score=%.2f) for: %s",
+                len(results), len(filtered), min_score, query[:50],
+            )
+            return filtered
 
         # Fall back to vector-only search
         results = await await_if_needed(
             self._db.embedding_search(
                 query_embedding=query_embedding,
                 match_count=limit,
-                match_threshold=0.5,
+                match_threshold=min_score,
             )
         )
 

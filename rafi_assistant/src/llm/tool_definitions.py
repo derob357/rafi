@@ -120,6 +120,22 @@ DELETE_EVENT_TOOL: dict[str, Any] = {
     },
 }
 
+GET_GOOGLE_AUTH_URL_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "get_google_auth_url",
+        "description": (
+            "Get the Google OAuth authorization URL. Use this when calendar "
+            "or email services need to be connected or re-authorized."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+}
+
 # =============================================================================
 # Email Tools
 # =============================================================================
@@ -657,6 +673,7 @@ CALENDAR_TOOLS: list[dict[str, Any]] = [
     CREATE_EVENT_TOOL,
     UPDATE_EVENT_TOOL,
     DELETE_EVENT_TOOL,
+    GET_GOOGLE_AUTH_URL_TOOL,
 ]
 
 EMAIL_TOOLS: list[dict[str, Any]] = [
@@ -723,3 +740,9 @@ def get_tool_names() -> list[str]:
 def get_all_tool_schemas() -> list[dict[str, Any]]:
     """Return all defined tool schemas."""
     return ALL_TOOLS
+
+
+# Lookup map: tool function name → OpenAI schema
+TOOL_SCHEMA_MAP: dict[str, dict[str, Any]] = {
+    tool["function"]["name"]: tool for tool in ALL_TOOLS
+}

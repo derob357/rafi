@@ -1,63 +1,111 @@
+"""Tool registry with dynamic dispatch and OpenAI schema support.
+
+Registers tools with their implementations and LLM schemas, providing a single
+entry point for tool execution across all channels (Telegram, WhatsApp, etc.)
+and the voice pipeline.
+"""
+
+import inspect
+import json
 import logging
-from typing import Any, Dict, List, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
 class ToolRegistry:
+    """Registry of executable tools for Rafi.
+
+    Each tool has a function, description, and optional OpenAI-format schema.
+    Provides dynamic dispatch: call invoke(name, **kwargs) to execute any
+    registered tool and get a string result back for the LLM.
     """
-    Registry of executable actions for Rafi.
-    
-    Tools wrap service calls (Calendar, Email, Tasks, etc.) into a consistent
-    interface that can be invoked by the UI or LLM agents.
-    """
-    def __init__(self, registry):
+
+    def __init__(self, registry=None):
         self.registry = registry
         self._tools: Dict[str, Dict[str, Any]] = {}
 
-        # Default tools would be registered here
-        # Note: We check if attributes exist to avoid crashes if services aren't initialized
-        self._register_default_tools()
+    def register_tool(
+        self,
+        name: str,
+        func: Callable,
+        description: str,
+        schema: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register a tool.
 
-    def _register_default_tools(self):
-        """Wire up initial tools from existing services."""
-        # This is a skeleton - actual tool registration happens during wiring
-        pass
-
-    def register_tool(self, name: str, func: Callable, description: str):
-        """Register a new tool."""
+        Args:
+            name: Tool name (must match the function name in the OpenAI schema).
+            func: Async or sync callable to execute.
+            description: Human-readable description.
+            schema: Optional OpenAI-format tool schema for LLM function calling.
+        """
         self._tools[name] = {
             "func": func,
-            "description": description
+            "description": description,
+            "schema": schema,
         }
-        logger.debug(f"Registered tool: {name}")
+        logger.debug("Registered tool: %s", name)
 
-    async def invoke(self, name: str, *args, **kwargs) -> Any:
-        """Execute a tool and broadcast the result via ServiceRegistry."""
+    async def invoke(self, name: str, **kwargs: Any) -> str:
+        """Execute a tool by name and return the result as a string.
+
+        All results are converted to strings for LLM consumption.
+        Non-string results are serialized to JSON.
+
+        Args:
+            name: Tool name.
+            **kwargs: Tool arguments from the LLM.
+
+        Returns:
+            String result suitable for the LLM tool response.
+        """
         if name not in self._tools:
-            logger.error(f"Unknown tool requested: {name}")
-            return {"error": f"Tool {name} not found"}
-        
-        logger.info(f"Invoking tool: {name}")
+            logger.warning("Unknown tool: %s", name)
+            return f"Unknown tool: {name}"
+
         tool = self._tools[name]
-        
+        logger.info("Invoking tool: %s", name)
+
         try:
-            # Check if function is coroutine
-            import inspect
             if inspect.iscoroutinefunction(tool["func"]):
-                result = await tool["func"](*args, **kwargs)
+                result = await tool["func"](**kwargs)
             else:
-                result = tool["func"](*args, **kwargs)
-                
-            await self.registry.broadcast_tool_result(name, result)
-            return result
+                result = tool["func"](**kwargs)
+
+            if self.registry and hasattr(self.registry, "broadcast_tool_result"):
+                await self.registry.broadcast_tool_result(name, result)
+
+            if isinstance(result, str):
+                return result
+            return json.dumps(result, default=str)
+
         except Exception as e:
-            logger.error(f"Error invoking tool {name}: {e}")
-            await self.registry.broadcast_tool_result(name, {"error": str(e)})
-            return {"error": str(e)}
+            logger.error("Tool execution error (%s): %s", name, e)
+            error_msg = f"Error executing {name}: {str(e)[:200]}"
+            if self.registry and hasattr(self.registry, "broadcast_tool_result"):
+                await self.registry.broadcast_tool_result(name, {"error": str(e)})
+            return error_msg
+
+    def get_openai_schemas(self) -> List[Dict[str, Any]]:
+        """Return OpenAI-format tool schemas for all registered tools.
+
+        Only returns schemas for tools that have one registered.
+        """
+        return [
+            tool["schema"]
+            for tool in self._tools.values()
+            if tool.get("schema")
+        ]
 
     def get_tool_definitions(self) -> List[Dict[str, str]]:
-        """Return metadata for all registered tools (useful for LLM prompt injection)."""
+        """Return simple metadata for all registered tools."""
         return [
             {"name": name, "description": tool["description"]}
             for name, tool in self._tools.items()
         ]
+
+    @property
+    def tool_names(self) -> list[str]:
+        """Return names of all registered tools."""
+        return list(self._tools.keys())

@@ -22,6 +22,10 @@ from fastapi import FastAPI, Request, Response
 
 from src.config.loader import load_config, AppConfig
 from src.bot.telegram_bot import TelegramBot
+from src.channels.processor import MessageProcessor
+from src.channels.telegram import TelegramAdapter
+from src.channels.whatsapp import WhatsAppAdapter
+from src.channels.manager import ChannelManager
 from src.db.supabase_client import SupabaseClient
 from src.llm.openai_provider import OpenAIProvider
 from src.llm.anthropic_provider import AnthropicProvider
@@ -35,6 +39,7 @@ from src.services.task_service import TaskService
 from src.services.note_service import NoteService
 from src.services.weather_service import WeatherService
 from src.services.memory_service import MemoryService
+from src.services.memory_files import MemoryFileService
 from src.services.cad_service import CadService
 from src.services.browser_service import BrowserService
 from src.services.screen_service import ScreenService
@@ -45,9 +50,11 @@ from src.orchestration.service_registry import ServiceRegistry
 from src.voice.conversation_manager import ConversationManager
 from src.vision.capture import CaptureDispatcher
 from src.tools.tool_registry import ToolRegistry
+from src.llm.tool_definitions import TOOL_SCHEMA_MAP
 from src.scheduling.scheduler import RafiScheduler
 from src.scheduling.briefing_job import BriefingJob
 from src.scheduling.reminder_job import ReminderJob
+from src.scheduling.heartbeat import HeartbeatRunner
 
 # Configure structured JSON logging
 from pythonjsonlogger.json import JsonFormatter
@@ -70,6 +77,7 @@ logger = logging.getLogger(__name__)
 # Global service references
 _config: AppConfig | None = None
 _telegram_bot: TelegramBot | None = None
+_channel_manager: ChannelManager | None = None
 _scheduler: RafiScheduler | None = None
 
 
@@ -106,7 +114,7 @@ def _create_llm_manager(config: AppConfig) -> LLMManager:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown."""
-    global _config, _telegram_bot, _scheduler
+    global _config, _telegram_bot, _channel_manager, _scheduler
 
     config_path = os.environ.get("RAFI_CONFIG_PATH", "/app/config.yaml")
     logger.info("Loading config from: %s", config_path)
@@ -147,6 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("Weather service unavailable: %s", e)
 
     memory_service = MemoryService(db=db, llm=llm)
+    memory_files = MemoryFileService()
 
     cad_service = CadService(db=db)
     
@@ -215,55 +224,185 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     registry.vision = CaptureDispatcher(registry)
     registry.tools = ToolRegistry(registry)
 
-    # -- Adapter wrappers for services whose update methods expect (id, updates_dict)
-    #    but the LLM sends individual kwargs like (task_id=..., title=..., status=...).
-    async def _update_task_adapter(task_id: str, **kwargs: Any) -> Any:
-        return await task_service.update_task(task_id, kwargs)
+    # -- Tool wrapper functions ------------------------------------------------
+    # Each wrapper calls the underlying service, formats the result as a
+    # human-readable string, and is registered with its OpenAI schema so the
+    # ToolRegistry becomes the single source of truth for tool execution.
+    s = TOOL_SCHEMA_MAP  # shorthand for schema lookup
 
-    async def _update_note_adapter(note_id: str, **kwargs: Any) -> Any:
-        return await note_service.update_note(note_id, kwargs)
+    # Calendar
+    async def _read_calendar(days: int = 7) -> str:
+        events = await calendar_service.list_events(days=days)
+        if not events:
+            return "No upcoming events found."
+        lines = []
+        for e in events:
+            line = (
+                f"- {e.get('summary', 'Untitled')} | "
+                f"{e.get('start', '')} to {e.get('end', '')}"
+            )
+            if e.get("location"):
+                line += f" @ {e['location']}"
+            lines.append(line)
+        return "\n".join(lines)
 
-    async def _update_event_adapter(event_id: str, **kwargs: Any) -> Any:
-        return await calendar_service.update_event(event_id, kwargs)
+    async def _create_event(
+        summary: str, start: str, end: str, location: str | None = None,
+    ) -> str:
+        result = await calendar_service.create_event(
+            summary=summary, start=start, end=end, location=location,
+        )
+        if result:
+            return f"Event created: {result.get('summary', '')} (ID: {result.get('id', '')})"
+        return "Failed to create event."
 
-    # Register tools for services
-    registry.tools.register_tool("create_task", task_service.create_task, "Create a task")
-    registry.tools.register_tool("list_tasks", task_service.list_tasks, "List all tasks")
-    registry.tools.register_tool("update_task", _update_task_adapter, "Update a task")
-    registry.tools.register_tool("delete_task", task_service.delete_task, "Delete a task")
-    registry.tools.register_tool("complete_task", task_service.complete_task, "Mark a task as completed")
+    async def _update_event(event_id: str, **kwargs: Any) -> str:
+        result = await calendar_service.update_event(event_id, kwargs)
+        if result:
+            return f"Event updated: {result.get('summary', '')}"
+        return "Failed to update event."
 
-    registry.tools.register_tool("list_notes", note_service.list_notes, "List notes")
-    registry.tools.register_tool("create_note", note_service.create_note, "Create a new note")
-    registry.tools.register_tool("get_note", note_service.get_note, "Get a specific note")
-    registry.tools.register_tool("update_note", _update_note_adapter, "Update a note")
-    registry.tools.register_tool("delete_note", note_service.delete_note, "Delete a note")
+    async def _delete_event(event_id: str) -> str:
+        success = await calendar_service.delete_event(event_id)
+        return "Event deleted." if success else "Failed to delete event."
 
-    registry.tools.register_tool("get_weather", weather_service.get_weather, "Get weather")
+    async def _get_google_auth_url() -> str:
+        url = await calendar_service.get_auth_url()
+        if url:
+            return f"Please visit this URL to authorize Google access:\n{url}"
+        return "Failed to generate authorization URL."
 
-    # Calendar & Email Tools
-    registry.tools.register_tool("read_calendar", calendar_service.list_events, "List upcoming calendar events")
-    registry.tools.register_tool("create_event", calendar_service.create_event, "Create a new calendar event")
-    registry.tools.register_tool("update_event", _update_event_adapter, "Update a calendar event")
-    registry.tools.register_tool("delete_event", calendar_service.delete_event, "Delete a calendar event")
-    registry.tools.register_tool("get_google_auth_url", calendar_service.get_auth_url, "Get the Google OAuth authorization URL to fix calendar/email initialization")
+    # Email
+    async def _read_emails(count: int = 20, unread_only: bool = False) -> str:
+        emails = await email_service.list_emails(count=count, unread_only=unread_only)
+        if not emails:
+            return "No emails found."
+        lines = []
+        for em in emails[:10]:
+            lines.append(
+                f"- From: {em.get('from', 'Unknown')} | "
+                f"Subject: {em.get('subject', 'No subject')} | "
+                f"Date: {em.get('date', '')}"
+            )
+        return "\n".join(lines)
 
-    registry.tools.register_tool("read_emails", email_service.list_emails, "Read recent emails")
-    registry.tools.register_tool("search_emails", email_service.search_emails, "Search emails")
-    registry.tools.register_tool("send_email", email_service.send_email, "Send a new email")
+    async def _search_emails(query: str) -> str:
+        emails = await email_service.search_emails(query)
+        if not emails:
+            return "No emails matched your search."
+        lines = []
+        for em in emails[:10]:
+            lines.append(
+                f"- From: {em.get('from', 'Unknown')} | "
+                f"Subject: {em.get('subject', 'No subject')} | "
+                f"Snippet: {em.get('snippet', '')[:100]}"
+            )
+        return "\n".join(lines)
 
-    # Memory tool
-    registry.tools.register_tool("recall_memory", memory_service.search_memory, "Search conversation history")
+    async def _send_email(to: str, subject: str, body: str) -> str:
+        result = await email_service.send_email(to=to, subject=subject, body=body)
+        if result:
+            return f"Email sent to {to}."
+        return "Failed to send email."
 
-    # Settings tools
-    async def _update_setting(key: str, value: str) -> dict[str, str]:
-        """Update a runtime setting. Only modifies in-memory config for this session."""
+    # Tasks
+    async def _create_task(
+        title: str, description: str | None = None, due_date: str | None = None,
+    ) -> str:
+        result = await task_service.create_task(
+            title=title, description=description, due_date=due_date,
+        )
+        if result:
+            return f"Task created: {result.get('title', '')} (ID: {result.get('id', '')})"
+        return "Failed to create task."
+
+    async def _list_tasks(status: str | None = None) -> str:
+        tasks = await task_service.list_tasks(status=status)
+        if not tasks:
+            return "No tasks found."
+        lines = []
+        for t in tasks:
+            due = f" (due: {t['due_date']})" if t.get("due_date") else ""
+            lines.append(
+                f"- [{t.get('status', 'pending')}] {t.get('title', 'Untitled')}{due}"
+            )
+        return "\n".join(lines)
+
+    async def _update_task(task_id: str, **kwargs: Any) -> str:
+        result = await task_service.update_task(task_id, kwargs)
+        if result:
+            return f"Task updated: {result.get('title', '')}"
+        return "Failed to update task."
+
+    async def _delete_task(task_id: str) -> str:
+        success = await task_service.delete_task(task_id)
+        return "Task deleted." if success else "Failed to delete task."
+
+    async def _complete_task(task_id: str) -> str:
+        result = await task_service.complete_task(task_id)
+        if result:
+            return f"Task completed: {result.get('title', '')}"
+        return "Failed to complete task."
+
+    # Notes
+    async def _create_note(title: str, content: str) -> str:
+        result = await note_service.create_note(title=title, content=content)
+        if result:
+            return f"Note created: {result.get('title', '')} (ID: {result.get('id', '')})"
+        return "Failed to create note."
+
+    async def _list_notes() -> str:
+        notes = await note_service.list_notes()
+        if not notes:
+            return "No notes found."
+        lines = []
+        for n in notes:
+            lines.append(f"- {n.get('title', 'Untitled')} (ID: {n.get('id', '')})")
+        return "\n".join(lines)
+
+    async def _get_note(note_id: str) -> str:
+        note = await note_service.get_note(note_id)
+        if note:
+            return f"Title: {note.get('title', '')}\n\n{note.get('content', '')}"
+        return "Note not found."
+
+    async def _update_note(note_id: str, **kwargs: Any) -> str:
+        result = await note_service.update_note(note_id, kwargs)
+        if result:
+            return f"Note updated: {result.get('title', '')}"
+        return "Failed to update note."
+
+    async def _delete_note(note_id: str) -> str:
+        success = await note_service.delete_note(note_id)
+        return "Note deleted." if success else "Failed to delete note."
+
+    # Weather
+    async def _get_weather(location: str | None = None) -> str:
+        if location:
+            return await weather_service.get_weather(location)
+        next_event = await calendar_service.get_next_event()
+        return await weather_service.get_weather_for_event(next_event)
+
+    # Memory
+    async def _recall_memory(query: str, limit: int = 5) -> str:
+        results = await memory_service.search_memory(query=query, limit=limit)
+        if not results:
+            return "I don't have any relevant memories about that."
+        lines = []
+        for r in results:
+            lines.append(
+                f"[{r.get('role', 'unknown')}] {r.get('content', '')[:200]}"
+            )
+        return "\n".join(lines)
+
+    # Settings
+    async def _update_setting(key: str, value: str) -> str:
         allowed = {
             "morning_briefing_time", "quiet_hours_start", "quiet_hours_end",
             "reminder_lead_minutes", "min_snooze_minutes",
         }
         if key not in allowed:
-            return {"error": f"Unknown setting: {key}. Allowed: {', '.join(sorted(allowed))}"}
+            return f"Unknown setting: {key}. Allowed: {', '.join(sorted(allowed))}"
         current = getattr(_config.settings, key, None)
         try:
             if key in ("reminder_lead_minutes", "min_snooze_minutes"):
@@ -271,25 +410,64 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             else:
                 setattr(_config.settings, key, value)
         except Exception as e:
-            return {"error": str(e)}
-        return {"setting": key, "old_value": str(current), "new_value": value}
+            return f"Error updating setting: {e}"
+        return f"Setting '{key}' updated from '{current}' to '{value}'."
 
-    async def _get_settings() -> dict[str, Any]:
-        """Return current runtime settings."""
-        return _config.settings.model_dump() if _config else {}
+    async def _get_settings() -> str:
+        settings = _config.settings.model_dump() if _config else {}
+        if not settings:
+            return "No custom settings found."
+        lines = []
+        for k, v in settings.items():
+            lines.append(f"- {k}: {v}")
+        return "\n".join(lines)
 
-    registry.tools.register_tool("update_setting", _update_setting, "Update a user setting")
-    registry.tools.register_tool("get_settings", _get_settings, "Get current settings")
+    # -- Register all tools with schemas for LLM function calling ------------
+    tool_reg = registry.tools
 
-    # ADA v2 tools
-    registry.tools.register_tool("generate_cad", cad_service.generate_stl, "Generate a 3D model (CAD) using build123d script")
-    registry.tools.register_tool("browse_web", browser_service.browse, "Navigate to a website and extract content")
-    registry.tools.register_tool("search_web", browser_service.search, "Search the web for information")
+    # Calendar
+    tool_reg.register_tool("read_calendar", _read_calendar, "List upcoming calendar events", schema=s.get("read_calendar"))
+    tool_reg.register_tool("create_event", _create_event, "Create a calendar event", schema=s.get("create_event"))
+    tool_reg.register_tool("update_event", _update_event, "Update a calendar event", schema=s.get("update_event"))
+    tool_reg.register_tool("delete_event", _delete_event, "Delete a calendar event", schema=s.get("delete_event"))
+    tool_reg.register_tool("get_google_auth_url", _get_google_auth_url, "Get Google OAuth URL", schema=s.get("get_google_auth_url"))
 
-    # Screen control tools
-    registry.tools.register_tool("mouse_move", screen_service.move_mouse, "Move mouse to x, y coordinates")
-    registry.tools.register_tool("mouse_click", screen_service.click, "Click at current or specified coordinates")
-    registry.tools.register_tool("keyboard_type", screen_service.type_text, "Type text on target computer")
+    # Email
+    tool_reg.register_tool("read_emails", _read_emails, "Read recent emails", schema=s.get("read_emails"))
+    tool_reg.register_tool("search_emails", _search_emails, "Search emails", schema=s.get("search_emails"))
+    tool_reg.register_tool("send_email", _send_email, "Send an email", schema=s.get("send_email"))
+
+    # Tasks
+    tool_reg.register_tool("create_task", _create_task, "Create a task", schema=s.get("create_task"))
+    tool_reg.register_tool("list_tasks", _list_tasks, "List tasks", schema=s.get("list_tasks"))
+    tool_reg.register_tool("update_task", _update_task, "Update a task", schema=s.get("update_task"))
+    tool_reg.register_tool("delete_task", _delete_task, "Delete a task", schema=s.get("delete_task"))
+    tool_reg.register_tool("complete_task", _complete_task, "Complete a task", schema=s.get("complete_task"))
+
+    # Notes
+    tool_reg.register_tool("create_note", _create_note, "Create a note", schema=s.get("create_note"))
+    tool_reg.register_tool("list_notes", _list_notes, "List notes", schema=s.get("list_notes"))
+    tool_reg.register_tool("get_note", _get_note, "Get a note", schema=s.get("get_note"))
+    tool_reg.register_tool("update_note", _update_note, "Update a note", schema=s.get("update_note"))
+    tool_reg.register_tool("delete_note", _delete_note, "Delete a note", schema=s.get("delete_note"))
+
+    # Weather
+    tool_reg.register_tool("get_weather", _get_weather, "Get weather", schema=s.get("get_weather"))
+
+    # Memory
+    tool_reg.register_tool("recall_memory", _recall_memory, "Search conversation history", schema=s.get("recall_memory"))
+
+    # Settings
+    tool_reg.register_tool("update_setting", _update_setting, "Update a setting", schema=s.get("update_setting"))
+    tool_reg.register_tool("get_settings", _get_settings, "Get current settings", schema=s.get("get_settings"))
+
+    # CAD, Browser, Screen (return dicts/strings, auto-serialized by invoke())
+    tool_reg.register_tool("generate_cad", cad_service.generate_stl, "Generate a 3D CAD model", schema=s.get("generate_cad"))
+    tool_reg.register_tool("browse_web", browser_service.browse, "Navigate to a website", schema=s.get("browse_web"))
+    tool_reg.register_tool("search_web", browser_service.search, "Search the web", schema=s.get("search_web"))
+    tool_reg.register_tool("mouse_move", screen_service.move_mouse, "Move mouse", schema=s.get("mouse_move"))
+    tool_reg.register_tool("mouse_click", screen_service.click, "Click mouse", schema=s.get("mouse_click"))
+    tool_reg.register_tool("keyboard_type", screen_service.type_text, "Type text", schema=s.get("keyboard_type"))
 
     # Store registry on app state for route access
     app.state.registry = registry
@@ -307,6 +485,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.notes = note_service
     app.state.weather = weather_service
     app.state.memory = memory_service
+    app.state.memory_files = memory_files
     app.state.twilio = twilio_handler
     app.state.elevenlabs = elevenlabs_agent
     app.state.deepgram = deepgram_stt
@@ -344,9 +523,66 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         timezone=_config.settings.timezone,
     )
 
+    # -- Channel system -------------------------------------------------------
+    # Shared message processor (LLM orchestration for all channels)
+    processor = MessageProcessor(
+        config=_config,
+        llm=llm,
+        memory=memory_service,
+        tool_registry=registry.tools,
+        memory_files=memory_files,
+    )
+
+    # Channel adapters
+    telegram_adapter = TelegramAdapter(
+        config=_config,
+        db=db,
+        processor=processor,
+        deepgram_stt=deepgram_stt,
+        llm_manager=llm,
+    )
+
+    whatsapp_adapter = WhatsAppAdapter(
+        config=_config,
+        processor=processor,
+    )
+
+    _channel_manager = ChannelManager(preferred_channel="telegram")
+    _channel_manager.register(telegram_adapter)
+    _channel_manager.register(whatsapp_adapter)
+
+    app.state.channel_manager = _channel_manager
+    app.state.whatsapp_adapter = whatsapp_adapter
+
+    # Legacy TelegramBot (kept for backward-compatible send_message used by scheduler)
+    _telegram_bot = TelegramBot(
+        config=_config,
+        db=db,
+        llm=llm,
+        llm_manager=llm,
+        memory=memory_service,
+        memory_files=memory_files,
+        tool_registry=registry.tools,
+        deepgram_stt=deepgram_stt,
+    )
+
+    # -- Heartbeat runner -----------------------------------------------------
+    heartbeat = HeartbeatRunner(
+        config=_config,
+        llm=llm,
+        memory_files=memory_files,
+        channel_manager=_channel_manager,
+        calendar=calendar_service,
+        email=email_service,
+        tasks=task_service,
+        weather=weather_service,
+    )
+
+    # Register all scheduler callbacks and start
     _scheduler.set_briefing_callback(briefing_job.run)
     _scheduler.set_reminder_callback(reminder_job.run)
     _scheduler.set_calendar_sync_callback(calendar_service.sync_events_to_cache)
+    _scheduler.add_heartbeat(heartbeat.run)
     _scheduler.setup_jobs()
     _scheduler.start()
 
@@ -358,25 +594,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Email: %s", "ONLINE" if email_service._service else "OFFLINE")
     logger.info("Browser: ONLINE")
     logger.info("Weather: ONLINE")
+    logger.info("Channels: %s", _channel_manager.available_channels)
+    logger.info("Heartbeat: every 30 minutes")
     logger.info("---------------------------------------")
     logger.info("Rafi Assistant logic initialized successfully.")
 
-    # Initialize and start Telegram bot
-    _telegram_bot = TelegramBot(
-        config=_config,
-        db=db,
-        llm=llm,
-        llm_manager=llm,
-        memory=memory_service,
-        calendar=calendar_service,
-        email=email_service,
-        tasks=task_service,
-        notes=note_service,
-        weather=weather_service,
-        deepgram_stt=deepgram_stt,
-    )
+    # Start channels (Telegram polling, WhatsApp client init)
+    await _channel_manager.start_all()
 
-    # Start Telegram polling in background task
+    # Also start legacy TelegramBot for scheduler's send_message fallback
     bot_task = asyncio.create_task(_telegram_bot.start())
     logger.info("Rafi Assistant started for client: %s", _config.client.name)
 
@@ -385,6 +611,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     logger.info("Shutting down Rafi Assistant...")
     await browser_service.shutdown()
+    if _channel_manager:
+        await _channel_manager.stop_all()
     if _telegram_bot:
         await _telegram_bot.stop()
     if _scheduler:
@@ -438,6 +666,19 @@ async def handle_tool_call(tool_name: str, request: Request) -> Response:
     """Handle tool call webhooks from ElevenLabs during voice conversations."""
     twilio_handler: TwilioHandler = request.app.state.twilio
     return await twilio_handler.handle_tool_call(request)
+
+
+# WhatsApp webhook route (Twilio WhatsApp messages)
+@app.post("/api/whatsapp/inbound")
+async def whatsapp_inbound(request: Request) -> Response:
+    """Handle inbound WhatsApp messages from Twilio."""
+    from src.channels.whatsapp import WhatsAppAdapter
+
+    adapter: WhatsAppAdapter = request.app.state.whatsapp_adapter
+    form_data = await request.form()
+    twiml = await adapter.handle_inbound(dict(form_data))
+
+    return Response(content=twiml, media_type="application/xml")
 
 
 # OAuth callback route

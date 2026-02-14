@@ -33,6 +33,8 @@ class RafiScheduler:
         self._briefing_callback: Optional[Any] = None
         self._reminder_callback: Optional[Any] = None
         self._calendar_sync_callback: Optional[Any] = None
+        self._heartbeat_callback: Optional[Any] = None
+        self._heartbeat_interval: int = 30
 
     @property
     def scheduler(self) -> AsyncIOScheduler:
@@ -50,11 +52,22 @@ class RafiScheduler:
         """Set the callback function for calendar sync."""
         self._calendar_sync_callback = callback
 
+    def add_heartbeat(self, callback: Any, every_minutes: int = 30) -> None:
+        """Register the heartbeat job.
+
+        Args:
+            callback: Async function to run each tick.
+            every_minutes: Interval between heartbeat ticks.
+        """
+        self._heartbeat_callback = callback
+        self._heartbeat_interval = every_minutes
+
     def setup_jobs(self) -> None:
         """Configure all scheduled jobs based on current settings."""
         self._setup_briefing_job()
         self._setup_reminder_job()
         self._setup_calendar_sync_job()
+        self._setup_heartbeat_job()
         logger.info("All scheduled jobs configured")
 
     def _setup_briefing_job(self) -> None:
@@ -116,6 +129,23 @@ class RafiScheduler:
             replace_existing=True,
         )
         logger.info("Calendar sync scheduled every 15 minutes")
+
+    def _setup_heartbeat_job(self) -> None:
+        """Schedule the heartbeat check job."""
+        if not self._heartbeat_callback:
+            logger.info("No heartbeat callback set, skipping heartbeat job")
+            return
+
+        self._scheduler.add_job(
+            self._heartbeat_callback,
+            trigger=IntervalTrigger(minutes=self._heartbeat_interval),
+            id="heartbeat",
+            name="Heartbeat Check",
+            replace_existing=True,
+        )
+        logger.info(
+            "Heartbeat scheduled every %d minutes", self._heartbeat_interval,
+        )
 
     def start(self) -> None:
         """Start the scheduler."""

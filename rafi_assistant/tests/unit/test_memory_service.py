@@ -43,6 +43,7 @@ def _message_record(
         "content": content,
         "embedding": [0.01] * EMBEDDING_DIM,
         "source": source,
+        "similarity": 0.85,
         "created_at": "2025-06-15T09:00:00+00:00",
     }
 

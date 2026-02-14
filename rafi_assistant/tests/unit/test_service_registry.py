@@ -35,11 +35,11 @@ async def test_service_registry_broadcast_transcript():
     await registry.broadcast_transcript("Hello world", is_final=True)
     
     # Check listener
-    mock_callback.assert_called_once_with(text="Hello world", is_final=True)
-    
+    mock_callback.assert_called_once_with(text="Hello world", is_final=True, role="user")
+
     # Check queue
     item = await registry.transcript_queue.get()
-    assert item == {"text": "Hello world", "is_final": True}
+    assert item == {"text": "Hello world", "is_final": True, "role": "user"}
 
 @pytest.mark.asyncio
 async def test_service_registry_broadcast_tool_result():
