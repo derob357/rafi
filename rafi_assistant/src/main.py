@@ -711,6 +711,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from src.mcp.sse_transport import router as mcp_sse_router
+app.include_router(mcp_sse_router)
 
 # Root endpoint
 @app.get("/")

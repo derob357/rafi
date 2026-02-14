@@ -7,6 +7,13 @@
       "env": {
         "PYTHONPATH": "/Users/drob/Documents/Rafi/rafi_assistant"
       }
+    },
+    "rafi-remote": {
+      "url": "https://your-tunnel-url.trycloudflare.com/api/mcp/sse",
+      "transport": "sse",
+      "headers": {
+        "Authorization": "Bearer ${MCP_AUTH_TOKEN}"
+      }
     }
   }
 }
