@@ -533,6 +533,51 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _register_if_enabled("mouse_click", screen_service.click, "Click mouse")
     _register_if_enabled("keyboard_type", screen_service.type_text, "Type text")
 
+    # Obsidian Vault — registered directly (not skill-gated)
+    vault_root = Path(os.environ.get("OBSIDIAN_VAULT_PATH", str(Path.home() / "Documents" / "myWork")))
+
+    async def _list_vault_files(path: str = "") -> str:
+        target = (vault_root / path).resolve()
+        if not str(target).startswith(str(vault_root.resolve())):
+            return "Error: path outside vault."
+        if not target.is_dir():
+            return f"Not a directory: {path or '/'}"
+        entries = sorted(target.iterdir())
+        lines = []
+        for e in entries:
+            if e.name.startswith("."):
+                continue
+            suffix = "/" if e.is_dir() else ""
+            lines.append(f"{e.name}{suffix}")
+        return "\n".join(lines) if lines else "(empty directory)"
+
+    async def _read_vault_file(path: str) -> str:
+        target = (vault_root / path).resolve()
+        if not str(target).startswith(str(vault_root.resolve())):
+            return "Error: path outside vault."
+        if not target.is_file():
+            return f"File not found: {path}"
+        return target.read_text(encoding="utf-8")
+
+    async def _write_vault_file(path: str, content: str) -> str:
+        target = (vault_root / path).resolve()
+        if not str(target).startswith(str(vault_root.resolve())):
+            return "Error: path outside vault."
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"Written: {path}"
+
+    if vault_root.is_dir():
+        for vname, vfunc, vdesc in [
+            ("list_vault_files", _list_vault_files, "List files in the Obsidian vault"),
+            ("read_vault_file", _read_vault_file, "Read a file from the Obsidian vault"),
+            ("write_vault_file", _write_vault_file, "Create or update a file in the Obsidian vault"),
+        ]:
+            tool_reg.register_tool(vname, vfunc, vdesc, schema=TOOL_SCHEMA_MAP.get(vname))
+        logger.info("Vault tools registered (root: %s)", vault_root)
+    else:
+        logger.info("Vault path not found, vault tools skipped: %s", vault_root)
+
     enabled_tool_names = sorted(tool_reg.tool_names)
     logger.info(
         "Enabled tools after skill gating (%d): %s",

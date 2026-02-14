@@ -4,6 +4,9 @@
  * Vertical-first web UI that connects to Rafi over WebSocket.
  * Provides camera access via getUserMedia and hand gesture
  * recognition via MediaPipe Tasks Vision (client-side WASM).
+ *
+ * Access control: a valid token (delivered via SMS) is required.
+ * Without one the visitor sees a red "locked" screen forever.
  */
 
 // ── Configuration ────────────────────────────────────────────────────────────
@@ -34,6 +37,7 @@ let micActive = false;
 let recognition = null;
 let audioQueue = [];
 let audioPlaying = false;
+let isLocked = true;  // assume locked until token is verified
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
 
@@ -48,6 +52,141 @@ const gestLabel    = document.getElementById('gesture-label');
 const micBtn       = document.getElementById('mic-btn');
 const cameraBtn    = document.getElementById('camera-btn');
 const textInput    = document.getElementById('text-input');
+const lockedOverlay = document.getElementById('locked-overlay');
+const lockedCanvas  = document.getElementById('locked-visualizer');
+const lockedStatus  = document.getElementById('locked-status');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Token Check & Lock Gate
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function checkAccess() {
+    const params = new URLSearchParams(window.location.search);
+    const token  = params.get('t') || '';
+
+    if (!token) {
+        showLocked();
+        return;
+    }
+
+    try {
+        const res  = await fetch(`/api/mobile/check-token?t=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (data.valid) {
+            unlock();
+        } else {
+            showLocked();
+        }
+    } catch (_) {
+        showLocked();
+    }
+}
+
+function showLocked() {
+    isLocked = true;
+    lockedOverlay.classList.remove('hidden');
+    drawLockedVisualizer();
+}
+
+function unlock() {
+    isLocked = false;
+    lockedOverlay.classList.add('hidden');
+    connectWebSocket();
+    drawVisualizer();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Locked Visualizer (red theme — fake "speak the password" screen)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let lockedTime = 0;
+
+function drawLockedVisualizer() {
+    const canvas = lockedCanvas;
+    const ctx    = canvas.getContext('2d');
+    const dpr    = window.devicePixelRatio || 1;
+    const rect   = canvas.getBoundingClientRect();
+
+    canvas.width  = rect.width  * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+
+    const w   = rect.width;
+    const h   = rect.height;
+    const cx  = w / 2;
+    const cy  = h / 2;
+    const dim = Math.min(w, h);
+
+    lockedTime += 0.02;
+    ctx.clearRect(0, 0, w, h);
+
+    const baseRadius = dim * 0.25;
+    const radius = baseRadius + Math.sin(lockedTime * 1.5) * dim * 0.012;
+
+    // Outer ambient glow (red)
+    const glowR = radius * 2.0;
+    const grad  = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
+    grad.addColorStop(0,   'rgba(180,20,20,0.14)');
+    grad.addColorStop(0.5, 'rgba(180,20,20,0.05)');
+    grad.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Inner halo (red)
+    const haloR = radius * 1.3;
+    const hGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
+    hGrad.addColorStop(0,   'rgba(255,30,30,0.18)');
+    hGrad.addColorStop(0.7, 'rgba(255,30,30,0.06)');
+    hGrad.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = hGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Main circle (red)
+    ctx.strokeStyle = 'rgba(255,40,40,0.55)';
+    ctx.lineWidth   = 1.8;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Outer ring
+    ctx.strokeStyle = 'rgba(180,20,20,0.18)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 1.12, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // "SPEAK THE PASSWORD" text — two lines
+    const fontSizePrimary   = Math.max(11, dim * 0.05);
+    const fontSizeSecondary = Math.max(9,  dim * 0.032);
+
+    // Main line
+    ctx.font         = `bold ${fontSizePrimary}px 'Segoe UI', 'Helvetica Neue', sans-serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle    = 'rgba(255,40,40,0.65)';
+    ctx.fillText('SPEAK THE PASSWORD', cx, cy - fontSizePrimary * 0.55);
+    ctx.fillStyle    = 'rgba(255,180,180,0.9)';
+    ctx.fillText('SPEAK THE PASSWORD', cx, cy - fontSizePrimary * 0.55);
+
+    // Subtitle
+    ctx.font      = `${fontSizeSecondary}px 'Segoe UI', 'Helvetica Neue', sans-serif`;
+    ctx.fillStyle = 'rgba(255,60,60,0.45)';
+    ctx.fillText('BEEP THREE TIMES FAST AND STOP', cx, cy + fontSizePrimary * 0.65);
+
+    // Orbiting dot (red)
+    const orbitR = radius * 1.06;
+    const angle  = lockedTime * 1.0;
+    ctx.fillStyle = 'rgba(255,40,40,0.6)';
+    ctx.beginPath();
+    ctx.arc(cx + orbitR * Math.cos(angle), cy + orbitR * Math.sin(angle), 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (isLocked) requestAnimationFrame(drawLockedVisualizer);
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // WebSocket
@@ -74,7 +213,7 @@ function connectWebSocket() {
     ws.onclose = () => {
         voiceBadge.textContent = 'OFFLINE';
         voiceBadge.className   = 'badge';
-        setTimeout(connectWebSocket, WS_RECONNECT_DELAY);
+        if (!isLocked) setTimeout(connectWebSocket, WS_RECONNECT_DELAY);
     };
 
     ws.onerror = (err) => console.error('WS error', err);
@@ -390,7 +529,7 @@ function drawVisualizer() {
     ctx.arc(cx + orbitR * Math.cos(angle), cy + orbitR * Math.sin(angle), 3, 0, Math.PI * 2);
     ctx.fill();
 
-    animFrameId = requestAnimationFrame(drawVisualizer);
+    if (!isLocked) animFrameId = requestAnimationFrame(drawVisualizer);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -546,8 +685,7 @@ micBtn.addEventListener('click', toggleMic);
 cameraBtn.addEventListener('click', toggleCamera);
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Init
+// Init — check token before doing anything
 // ═══════════════════════════════════════════════════════════════════════════════
 
-connectWebSocket();
-drawVisualizer();
+checkAccess();

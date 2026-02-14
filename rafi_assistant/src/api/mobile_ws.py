@@ -16,6 +16,7 @@ import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 
 from src.channels.base import ChannelMessage
 from src.vision.gesture import GestureActionMapper
@@ -58,6 +59,17 @@ def _validate_token(token: str) -> bool:
     return True
 
 
+# ── Token check endpoint (for the UI to decide locked vs unlocked) ────────────
+
+
+@router.get("/api/mobile/check-token")
+async def check_token(t: str = Query("")) -> JSONResponse:
+    """Let the mobile UI check if a token is valid before connecting WS."""
+    if not t:
+        return JSONResponse({"valid": False})
+    return JSONResponse({"valid": _validate_token(t)})
+
+
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
 
 
@@ -68,8 +80,8 @@ async def mobile_websocket(
 ) -> None:
     """Bidirectional WebSocket for the mobile companion UI."""
 
-    # Validate token (skip if no tokens have been issued yet — dev mode)
-    if _tokens and t and not _validate_token(t):
+    # Require a valid token (SMS-issued or challenge-issued)
+    if not t or not _validate_token(t):
         await websocket.close(code=4001, reason="Invalid or expired token")
         return
 

@@ -720,6 +720,78 @@ ADA_V2_TOOLS: list[dict[str, Any]] = [
     KEYBOARD_TYPE_TOOL,
 ]
 
+# ── Vault (Obsidian) ─────────────────────────────────────────────────────────
+
+LIST_VAULT_FILES_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "list_vault_files",
+        "description": (
+            "List files and folders in the Obsidian vault. "
+            "Provide a relative path to list a subdirectory, or omit for root."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path inside the vault (e.g. 'Daily Notes'). Defaults to root.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+READ_VAULT_FILE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "read_vault_file",
+        "description": "Read a markdown file from the Obsidian vault.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path to the file (e.g. 'Daily Notes/2026-02-14.md').",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+}
+
+WRITE_VAULT_FILE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "write_vault_file",
+        "description": (
+            "Create or overwrite a file in the Obsidian vault. "
+            "Parent directories are created automatically."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path for the file (e.g. 'Rafi/status.md').",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The full file content to write.",
+                },
+            },
+            "required": ["path", "content"],
+        },
+    },
+}
+
+VAULT_TOOLS: list[dict[str, Any]] = [
+    LIST_VAULT_FILES_TOOL,
+    READ_VAULT_FILE_TOOL,
+    WRITE_VAULT_FILE_TOOL,
+]
+
 ALL_TOOLS: list[dict[str, Any]] = (
     CALENDAR_TOOLS
     + EMAIL_TOOLS
@@ -729,6 +801,7 @@ ALL_TOOLS: list[dict[str, Any]] = (
     + SETTINGS_TOOLS
     + MEMORY_TOOLS
     + ADA_V2_TOOLS
+    + VAULT_TOOLS
 )
 
 
