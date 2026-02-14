@@ -241,6 +241,23 @@ class TwilioHandler:
                 "direction": "outbound",
                 "context": context,
             }
+
+            # Send SMS with mobile companion link
+            if self._webhook_base_url:
+                try:
+                    from src.api.mobile_ws import generate_mobile_token
+
+                    token = generate_mobile_token(call_sid=call.sid)
+                    mobile_url = f"{self._webhook_base_url}/mobile?t={token}"
+                    self._client.messages.create(
+                        to=self._client_phone,
+                        from_=self._phone_number,
+                        body=f"Rafi companion: {mobile_url}",
+                    )
+                    logger.info("Mobile companion SMS sent for call %s", call.sid)
+                except Exception as sms_err:
+                    logger.warning("Failed to send mobile companion SMS: %s", sms_err)
+
             return call.sid
 
         except Exception as e:

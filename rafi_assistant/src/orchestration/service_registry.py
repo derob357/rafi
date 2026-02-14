@@ -64,7 +64,7 @@ class ServiceRegistry:
     def register_listener(self, event_type: str, callback: Callable[..., Coroutine[Any, Any, None]]) -> None:
         """
         Register an async callback for a specific event type.
-        
+
         Args:
             event_type: The category of event (e.g., 'voice', 'transcript', 'ui', 'logs').
             callback: An async function to be called when the event is emitted.
@@ -73,6 +73,14 @@ class ServiceRegistry:
             self._listeners[event_type] = []
         self._listeners[event_type].append(callback)
         logger.debug(f"Registered listener for {event_type}")
+
+    def unregister_listener(self, event_type: str, callback: Callable[..., Coroutine[Any, Any, None]]) -> None:
+        """Remove a previously registered listener."""
+        listeners = self._listeners.get(event_type, [])
+        try:
+            listeners.remove(callback)
+        except ValueError:
+            pass
 
     async def emit(self, event_type: str, *args: Any, **kwargs: Any) -> None:
         """

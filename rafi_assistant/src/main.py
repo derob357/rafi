@@ -721,6 +721,15 @@ app = FastAPI(
 from src.mcp.sse_transport import router as mcp_sse_router
 app.include_router(mcp_sse_router)
 
+from src.api.mobile_ws import router as mobile_ws_router
+app.include_router(mobile_ws_router)
+
+# Serve mobile companion UI as static files
+from fastapi.staticfiles import StaticFiles as _StaticFiles
+_mobile_static = os.path.join(str(BASE_DIR), "static", "mobile")
+if os.path.isdir(_mobile_static):
+    app.mount("/mobile", _StaticFiles(directory=_mobile_static, html=True), name="mobile")
+
 # Root endpoint
 @app.get("/")
 async def root() -> dict[str, str]:

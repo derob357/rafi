@@ -38,6 +38,7 @@ RUN playwright install chromium --with-deps
 COPY src/ ./src/
 COPY skills/ ./skills/
 COPY memory/ ./memory/
+COPY static/ ./static/
 
 # Create data directories
 RUN mkdir -p /data/logs /data/memory/daily

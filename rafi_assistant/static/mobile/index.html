@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a1a">
+    <title>R.A.F.I.</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <span class="title">R . A . F . I .</span>
+        <div class="badges">
+            <span id="voice-badge" class="badge">OFFLINE</span>
+            <span id="camera-badge" class="badge">CAM OFF</span>
+        </div>
+    </header>
+
+    <main>
+        <section id="visualizer-section">
+            <canvas id="visualizer"></canvas>
+        </section>
+
+        <section id="transcript-section">
+            <div id="transcript"></div>
+        </section>
+
+        <section id="camera-section" class="hidden">
+            <div id="camera-container">
+                <video id="camera-preview" autoplay playsinline muted></video>
+                <canvas id="gesture-canvas"></canvas>
+                <div id="gesture-label">No gesture</div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="toolbar">
+            <button id="camera-btn" class="tool-btn">CAMERA</button>
+        </div>
+        <div class="input-row">
+            <input type="text" id="text-input" placeholder="INITIALIZE COMMAND..." autocomplete="off">
+        </div>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
