@@ -1,6 +1,21 @@
+import os
+import sys
+
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
+
+_no_display = (
+    sys.platform != "darwin"
+    and not os.environ.get("DISPLAY")
+    and not os.environ.get("WAYLAND_DISPLAY")
+)
+
+pytestmark = pytest.mark.skipif(
+    _no_display,
+    reason="Screen capture requires a display server (not available in headless Docker)",
+)
+
 from src.vision.capture import CaptureDispatcher
 
 @pytest.mark.asyncio

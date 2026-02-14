@@ -5,7 +5,7 @@ WORKDIR /app
 # Install system dependencies for Playwright, CAD (Build123d), and audio
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libnss3 \
     libnspr4 \

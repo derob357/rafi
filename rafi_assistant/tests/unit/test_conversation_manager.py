@@ -1,6 +1,15 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from src.voice.conversation_manager import ConversationManager
+
+try:
+    from src.voice.conversation_manager import ConversationManager
+except OSError:
+    ConversationManager = None
+
+pytestmark = pytest.mark.skipif(
+    ConversationManager is None,
+    reason="PortAudio library not available (headless environment)",
+)
 
 
 @pytest.mark.asyncio

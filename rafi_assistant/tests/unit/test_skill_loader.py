@@ -23,9 +23,8 @@ def _write_skill_file(skill_dir: Path, frontmatter: str, body: str = "# Skill\n"
     return path
 
 
-def test_parse_skill_file_valid() -> None:
-    root = Path(__file__).parent
-    skill_path = root / "_tmp_parse_valid_SKILL.md"
+def test_parse_skill_file_valid(tmp_path: Path) -> None:
+    skill_path = tmp_path / "_tmp_parse_valid_SKILL.md"
     skill_path.write_text(
         """---
 name: sample
@@ -43,15 +42,12 @@ Use tool_a.
 """,
         encoding="utf-8",
     )
-    try:
-        skill = parse_skill_file(skill_path)
-        assert skill is not None
-        assert skill.name == "sample"
-        assert skill.tools == ["tool_a"]
-        assert skill.requires_env == ["SAMPLE_KEY"]
-        assert skill.enabled is True
-    finally:
-        skill_path.unlink(missing_ok=True)
+    skill = parse_skill_file(skill_path)
+    assert skill is not None
+    assert skill.name == "sample"
+    assert skill.tools == ["tool_a"]
+    assert skill.requires_env == ["SAMPLE_KEY"]
+    assert skill.enabled is True
 
 
 def test_parse_skill_file_invalid_yaml(tmp_path: Path) -> None:
