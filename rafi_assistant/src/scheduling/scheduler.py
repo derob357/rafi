@@ -62,6 +62,30 @@ class RafiScheduler:
         self._heartbeat_callback = callback
         self._heartbeat_interval = every_minutes
 
+    def add_daily_job(
+        self, job_id: str, callback: Any, hour: int = 23, minute: int = 0,
+    ) -> None:
+        """Register a daily cron job.
+
+        Args:
+            job_id: Unique job identifier.
+            callback: Async function to run.
+            hour: Hour to run (0-23).
+            minute: Minute to run (0-59).
+        """
+        self._scheduler.add_job(
+            callback,
+            trigger=CronTrigger(
+                hour=hour,
+                minute=minute,
+                timezone=self._config.settings.timezone,
+            ),
+            id=job_id,
+            name=job_id.replace("_", " ").title(),
+            replace_existing=True,
+        )
+        logger.info("Daily job '%s' scheduled at %02d:%02d", job_id, hour, minute)
+
     def setup_jobs(self) -> None:
         """Configure all scheduled jobs based on current settings."""
         self._setup_briefing_job()

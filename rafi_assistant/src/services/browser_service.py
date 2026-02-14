@@ -50,6 +50,15 @@ class BrowserService:
             
             # Simple metadata extraction
             title = await page.title()
+            content_preview = await page.evaluate(
+                """
+                () => {
+                    const text = (document.body && document.body.innerText) ? document.body.innerText : "";
+                    const compact = text.replace(/\\s+/g, " ").trim();
+                    return compact.slice(0, 6000);
+                }
+                """
+            )
             
             # Take a screenshot for the 'vision' part of the ADA parity
             import tempfile
@@ -60,6 +69,8 @@ class BrowserService:
             return {
                 "url": url,
                 "title": title,
+                "content_preview": content_preview,
+                "content_chars": len(content_preview),
                 "screenshot": screenshot_path,
                 "status": "success"
             }

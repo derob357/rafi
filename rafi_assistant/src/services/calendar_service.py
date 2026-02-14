@@ -26,10 +26,7 @@ from src.utils.async_utils import await_if_needed
 logger = logging.getLogger(__name__)
 
 SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar",
 ]
 
 
@@ -116,8 +113,13 @@ class CalendarService:
             scopes=SCOPES,
         )
 
-        # Refresh if expired
-        if self._credentials.expired and self._credentials.refresh_token:
+        # Refresh when token is missing or expired
+        should_refresh = (
+            not self._credentials.token
+            or (self._credentials.expired and bool(self._credentials.refresh_token))
+        )
+
+        if should_refresh and self._credentials.refresh_token:
             try:
                 self._credentials.refresh(GoogleAuthRequest())
                 logger.info("Google OAuth token refreshed successfully")

@@ -1,8 +1,11 @@
-"""LLM Manager for runtime provider switching.
+"""LLM Manager for runtime provider switching with cost-based routing.
 
 Implements the LLMProvider interface while managing multiple backend
 providers. Chat requests go to the active provider; embeddings always
 go to OpenAI (the only provider with an embedding API).
+
+Cost-based routing sends simple queries to cheaper/faster models
+(Groq, Gemini) and complex queries to more capable models (OpenAI, Anthropic).
 """
 
 from __future__ import annotations
@@ -26,9 +29,30 @@ _ALIASES: dict[str, str] = {
     "llama": "groq",
 }
 
+# Cost tiers: lower number = cheaper. Used for routing simple queries.
+_COST_TIER: dict[str, int] = {
+    "groq": 1,
+    "gemini": 2,
+    "openai": 3,
+    "anthropic": 4,
+}
+
+# Keywords suggesting a complex query that needs a capable model
+_COMPLEX_INDICATORS = [
+    "analyze", "compare", "evaluate", "research", "explain in detail",
+    "write a report", "create a plan", "review", "audit", "summarize",
+    "multiple", "all of", "comprehensive", "thorough",
+]
+
+# Keywords suggesting a simple query that can use a cheaper model
+_SIMPLE_INDICATORS = [
+    "what time", "weather", "reminder", "set", "quick",
+    "yes", "no", "ok", "sure", "thanks",
+]
+
 
 class LLMManager(LLMProvider):
-    """Manages multiple LLM providers with runtime switching.
+    """Manages multiple LLM providers with runtime switching and cost-based routing.
 
     Implements the LLMProvider interface so it can be used as a drop-in
     replacement everywhere the codebase expects an LLMProvider.
@@ -39,6 +63,7 @@ class LLMManager(LLMProvider):
         providers: dict[str, LLMProvider],
         default: str,
         embedding_provider: Optional[LLMProvider] = None,
+        cost_routing_enabled: bool = False,
     ) -> None:
         if not providers:
             raise ValueError("At least one LLM provider must be configured")
@@ -48,11 +73,13 @@ class LLMManager(LLMProvider):
         self._providers = providers
         self._active = default
         self._embedding_provider = embedding_provider or providers.get("openai") or next(iter(providers.values()))
+        self._cost_routing = cost_routing_enabled
 
         logger.info(
-            "LLM Manager initialized. Active: %s, Available: %s",
+            "LLM Manager initialized. Active: %s, Available: %s, Cost routing: %s",
             self._active,
             list(self._providers.keys()),
+            self._cost_routing,
         )
 
     @property
@@ -64,6 +91,16 @@ class LLMManager(LLMProvider):
     def available(self) -> list[str]:
         """Return list of available provider names."""
         return list(self._providers.keys())
+
+    @property
+    def cost_routing_enabled(self) -> bool:
+        """Whether cost-based routing is active."""
+        return self._cost_routing
+
+    @cost_routing_enabled.setter
+    def cost_routing_enabled(self, value: bool) -> None:
+        self._cost_routing = value
+        logger.info("Cost routing %s", "enabled" if value else "disabled")
 
     def switch(self, name: str) -> str:
         """Switch the active provider.
@@ -86,6 +123,56 @@ class LLMManager(LLMProvider):
         logger.info("Switched LLM provider to: %s", canonical)
         return canonical
 
+    def _select_provider_for_query(self, messages: list[dict[str, Any]]) -> str:
+        """Select the best provider based on query complexity.
+
+        Simple queries → cheapest available provider
+        Complex queries → active (configured) provider
+
+        Args:
+            messages: The message list being sent to the LLM.
+
+        Returns:
+            Provider name to use.
+        """
+        if not self._cost_routing:
+            return self._active
+
+        # Only route based on the last user message
+        user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_text = msg.get("content", "").lower()
+                break
+
+        if not user_text:
+            return self._active
+
+        # Check for complexity indicators
+        is_complex = any(indicator in user_text for indicator in _COMPLEX_INDICATORS)
+        is_simple = any(indicator in user_text for indicator in _SIMPLE_INDICATORS)
+
+        # Short messages are likely simple
+        if len(user_text) < 30 and not is_complex:
+            is_simple = True
+
+        if is_simple and not is_complex:
+            # Route to cheapest available provider
+            sorted_providers = sorted(
+                self._providers.keys(),
+                key=lambda n: _COST_TIER.get(n, 99),
+            )
+            selected = sorted_providers[0]
+            if selected != self._active:
+                logger.debug(
+                    "Cost routing: simple query → %s (instead of %s)",
+                    selected,
+                    self._active,
+                )
+            return selected
+
+        return self._active
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -93,9 +180,12 @@ class LLMManager(LLMProvider):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> dict[str, Any]:
-        """Delegate chat to the active provider, falling back to others on failure."""
-        # Build try order: active provider first, then the rest
-        try_order = [self._active] + [n for n in self._providers if n != self._active]
+        """Delegate chat to the selected provider, falling back to others on failure."""
+        # Select provider (cost routing or default)
+        selected = self._select_provider_for_query(messages)
+
+        # Build try order: selected provider first, then the rest
+        try_order = [selected] + [n for n in self._providers if n != selected]
         last_error: Optional[Exception] = None
 
         for name in try_order:
@@ -107,10 +197,10 @@ class LLMManager(LLMProvider):
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
-                if name != self._active:
+                if name != selected:
                     logger.warning(
                         "Provider '%s' failed, fell back to '%s' successfully",
-                        self._active,
+                        selected,
                         name,
                     )
                 return result

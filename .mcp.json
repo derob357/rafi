@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "rafi": {
+      "command": "python3",
+      "args": ["-m", "src.mcp.server"],
+      "cwd": "/Users/drob/Documents/Rafi/rafi_assistant",
+      "env": {
+        "PYTHONPATH": "/Users/drob/Documents/Rafi/rafi_assistant"
+      }
+    }
+  }
+}

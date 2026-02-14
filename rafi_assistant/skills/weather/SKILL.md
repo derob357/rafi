@@ -4,7 +4,8 @@ description: Get current weather and forecasts.
 tools:
   - get_weather
 requires:
-  env: []
+  env:
+    - WEATHER_API_KEY
 ---
 
 # Weather Skill

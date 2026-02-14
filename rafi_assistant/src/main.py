@@ -49,10 +49,20 @@ from src.voice.conversation_manager import ConversationManager
 from src.vision.capture import CaptureDispatcher
 from src.tools.tool_registry import ToolRegistry
 from src.llm.tool_definitions import TOOL_SCHEMA_MAP
+from src.skills.loader import (
+    build_startup_validation_report,
+    discover_skills,
+    filter_eligible,
+    get_ineligibility_reasons,
+    get_tool_names_for_skills,
+)
 from src.scheduling.scheduler import RafiScheduler
 from src.scheduling.briefing_job import BriefingJob
 from src.scheduling.reminder_job import ReminderJob
 from src.scheduling.heartbeat import HeartbeatRunner
+from src.scheduling.memory_promotion import MemoryPromotionJob
+from src.services.isc_service import ISCService
+from src.services.learning_service import LearningService
 
 # Configure structured JSON logging
 from pythonjsonlogger.json import JsonFormatter
@@ -225,7 +235,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Each wrapper calls the underlying service, formats the result as a
     # human-readable string, and is registered with its OpenAI schema so the
     # ToolRegistry becomes the single source of truth for tool execution.
-    s = TOOL_SCHEMA_MAP  # shorthand for schema lookup
+    # Runtime skill-gating pipeline
+    discovered_skills = discover_skills()
+    eligible_skills = filter_eligible(discovered_skills)
+    ineligibility_reasons = get_ineligibility_reasons(discovered_skills)
+    eligible_tool_names = get_tool_names_for_skills(eligible_skills)
+    eligible_schema_map = {
+        name: schema
+        for name, schema in TOOL_SCHEMA_MAP.items()
+        if name in eligible_tool_names
+    }
+
+    discovered_skill_names = sorted(skill.name for skill in discovered_skills)
+    eligible_skill_names = sorted(skill.name for skill in eligible_skills)
+
+    logger.info(
+        "Skills discovered (%d): %s",
+        len(discovered_skill_names),
+        discovered_skill_names,
+    )
+    logger.info(
+        "Skills eligible (%d): %s",
+        len(eligible_skill_names),
+        eligible_skill_names,
+    )
+    for skill_name, reasons in sorted(ineligibility_reasons.items()):
+        if reasons.get("disabled"):
+            logger.info("Skill ineligible: %s (disabled)", skill_name)
+        missing_env = reasons.get("missing_env", [])
+        if missing_env:
+            logger.info(
+                "Skill ineligible: %s (missing env vars: %s)",
+                skill_name,
+                missing_env,
+            )
 
     # Calendar
     async def _read_calendar(days: int = 7) -> str:
@@ -422,49 +465,73 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # -- Register all tools with schemas for LLM function calling ------------
     tool_reg = registry.tools
 
+    def _register_if_enabled(name: str, func: Any, description: str) -> None:
+        if name not in eligible_tool_names:
+            logger.debug("Tool gated by skills: %s", name)
+            return
+        if name not in eligible_schema_map:
+            logger.warning("Eligible tool missing schema: %s", name)
+        tool_reg.register_tool(name, func, description, schema=eligible_schema_map.get(name))
+
     # Calendar
-    tool_reg.register_tool("read_calendar", _read_calendar, "List upcoming calendar events", schema=s.get("read_calendar"))
-    tool_reg.register_tool("create_event", _create_event, "Create a calendar event", schema=s.get("create_event"))
-    tool_reg.register_tool("update_event", _update_event, "Update a calendar event", schema=s.get("update_event"))
-    tool_reg.register_tool("delete_event", _delete_event, "Delete a calendar event", schema=s.get("delete_event"))
-    tool_reg.register_tool("get_google_auth_url", _get_google_auth_url, "Get Google OAuth URL", schema=s.get("get_google_auth_url"))
+    _register_if_enabled("read_calendar", _read_calendar, "List upcoming calendar events")
+    _register_if_enabled("create_event", _create_event, "Create a calendar event")
+    _register_if_enabled("update_event", _update_event, "Update a calendar event")
+    _register_if_enabled("delete_event", _delete_event, "Delete a calendar event")
+    _register_if_enabled("get_google_auth_url", _get_google_auth_url, "Get Google OAuth URL")
 
     # Email
-    tool_reg.register_tool("read_emails", _read_emails, "Read recent emails", schema=s.get("read_emails"))
-    tool_reg.register_tool("search_emails", _search_emails, "Search emails", schema=s.get("search_emails"))
-    tool_reg.register_tool("send_email", _send_email, "Send an email", schema=s.get("send_email"))
+    _register_if_enabled("read_emails", _read_emails, "Read recent emails")
+    _register_if_enabled("search_emails", _search_emails, "Search emails")
+    _register_if_enabled("send_email", _send_email, "Send an email")
 
     # Tasks
-    tool_reg.register_tool("create_task", _create_task, "Create a task", schema=s.get("create_task"))
-    tool_reg.register_tool("list_tasks", _list_tasks, "List tasks", schema=s.get("list_tasks"))
-    tool_reg.register_tool("update_task", _update_task, "Update a task", schema=s.get("update_task"))
-    tool_reg.register_tool("delete_task", _delete_task, "Delete a task", schema=s.get("delete_task"))
-    tool_reg.register_tool("complete_task", _complete_task, "Complete a task", schema=s.get("complete_task"))
+    _register_if_enabled("create_task", _create_task, "Create a task")
+    _register_if_enabled("list_tasks", _list_tasks, "List tasks")
+    _register_if_enabled("update_task", _update_task, "Update a task")
+    _register_if_enabled("delete_task", _delete_task, "Delete a task")
+    _register_if_enabled("complete_task", _complete_task, "Complete a task")
 
     # Notes
-    tool_reg.register_tool("create_note", _create_note, "Create a note", schema=s.get("create_note"))
-    tool_reg.register_tool("list_notes", _list_notes, "List notes", schema=s.get("list_notes"))
-    tool_reg.register_tool("get_note", _get_note, "Get a note", schema=s.get("get_note"))
-    tool_reg.register_tool("update_note", _update_note, "Update a note", schema=s.get("update_note"))
-    tool_reg.register_tool("delete_note", _delete_note, "Delete a note", schema=s.get("delete_note"))
+    _register_if_enabled("create_note", _create_note, "Create a note")
+    _register_if_enabled("list_notes", _list_notes, "List notes")
+    _register_if_enabled("get_note", _get_note, "Get a note")
+    _register_if_enabled("update_note", _update_note, "Update a note")
+    _register_if_enabled("delete_note", _delete_note, "Delete a note")
 
     # Weather
-    tool_reg.register_tool("get_weather", _get_weather, "Get weather", schema=s.get("get_weather"))
+    _register_if_enabled("get_weather", _get_weather, "Get weather")
 
     # Memory
-    tool_reg.register_tool("recall_memory", _recall_memory, "Search conversation history", schema=s.get("recall_memory"))
+    _register_if_enabled("recall_memory", _recall_memory, "Search conversation history")
 
     # Settings
-    tool_reg.register_tool("update_setting", _update_setting, "Update a setting", schema=s.get("update_setting"))
-    tool_reg.register_tool("get_settings", _get_settings, "Get current settings", schema=s.get("get_settings"))
+    _register_if_enabled("update_setting", _update_setting, "Update a setting")
+    _register_if_enabled("get_settings", _get_settings, "Get current settings")
 
     # CAD, Browser, Screen (return dicts/strings, auto-serialized by invoke())
-    tool_reg.register_tool("generate_cad", cad_service.generate_stl, "Generate a 3D CAD model", schema=s.get("generate_cad"))
-    tool_reg.register_tool("browse_web", browser_service.browse, "Navigate to a website", schema=s.get("browse_web"))
-    tool_reg.register_tool("search_web", browser_service.search, "Search the web", schema=s.get("search_web"))
-    tool_reg.register_tool("mouse_move", screen_service.move_mouse, "Move mouse", schema=s.get("mouse_move"))
-    tool_reg.register_tool("mouse_click", screen_service.click, "Click mouse", schema=s.get("mouse_click"))
-    tool_reg.register_tool("keyboard_type", screen_service.type_text, "Type text", schema=s.get("keyboard_type"))
+    _register_if_enabled("generate_cad", cad_service.generate_stl, "Generate a 3D CAD model")
+    _register_if_enabled("browse_web", browser_service.browse, "Navigate to a website")
+    _register_if_enabled("search_web", browser_service.search, "Search the web")
+    _register_if_enabled("mouse_move", screen_service.move_mouse, "Move mouse")
+    _register_if_enabled("mouse_click", screen_service.click, "Click mouse")
+    _register_if_enabled("keyboard_type", screen_service.type_text, "Type text")
+
+    enabled_tool_names = sorted(tool_reg.tool_names)
+    logger.info(
+        "Enabled tools after skill gating (%d): %s",
+        len(enabled_tool_names),
+        enabled_tool_names,
+    )
+    logger.info(
+        "\n%s",
+        build_startup_validation_report(
+            discovered_skills=discovered_skills,
+            eligible_skills=eligible_skills,
+            ineligibility_reasons=ineligibility_reasons,
+            exposed_tools=enabled_tool_names,
+        ),
+    )
 
     # Store registry on app state for route access
     app.state.registry = registry
@@ -520,6 +587,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         timezone=_config.settings.timezone,
     )
 
+    # -- ISC and Learning services --------------------------------------------
+    isc_service = ISCService(llm=llm)
+    learning_service = LearningService(db=db, llm=llm, memory_files=memory_files)
+
     # -- Channel system -------------------------------------------------------
     # Shared message processor (LLM orchestration for all channels)
     processor = MessageProcessor(
@@ -528,6 +599,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         memory=memory_service,
         tool_registry=registry.tools,
         memory_files=memory_files,
+        isc_service=isc_service,
+        learning_service=learning_service,
     )
 
     # Channel adapters
@@ -563,11 +636,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         weather=weather_service,
     )
 
+    # -- Memory promotion job (daily at 23:00) --------------------------------
+    memory_promotion = MemoryPromotionJob(llm=llm, memory_files=memory_files)
+
+    # -- Learning analysis callback -------------------------------------------
+    async def _run_learning_analysis() -> None:
+        """Periodic analysis of feedback to generate behavioral adjustments."""
+        adjustments = await learning_service.generate_adjustments()
+        if adjustments:
+            await learning_service.apply_adjustments_to_memory(adjustments)
+
     # Register all scheduler callbacks and start
     _scheduler.set_briefing_callback(briefing_job.run)
     _scheduler.set_reminder_callback(reminder_job.run)
     _scheduler.set_calendar_sync_callback(calendar_service.sync_events_to_cache)
     _scheduler.add_heartbeat(heartbeat.run)
+    _scheduler.add_daily_job("memory_promotion", memory_promotion.run, hour=23, minute=0)
+    _scheduler.add_daily_job("learning_analysis", _run_learning_analysis, hour=23, minute=30)
     _scheduler.setup_jobs()
     _scheduler.start()
 
@@ -658,6 +743,63 @@ async def whatsapp_inbound(request: Request) -> Response:
     twiml = await adapter.handle_inbound(dict(form_data))
 
     return Response(content=twiml, media_type="application/xml")
+
+
+# -- Dashboard endpoint (Phase 4) ------------------------------------------
+
+@app.get("/api/dashboard")
+async def dashboard(request: Request) -> dict[str, Any]:
+    """Observability dashboard data endpoint.
+
+    Returns current system state including active services, recent feedback,
+    memory stats, and scheduler status.
+    """
+    registry: ServiceRegistry = request.app.state.registry
+    memory_files: MemoryFileService = request.app.state.memory_files
+    channel_manager: ChannelManager = request.app.state.channel_manager
+
+    # Gather dashboard data
+    daily_logs = memory_files.list_daily_logs(limit=3)
+    log_stats = [
+        {"date": date_str, "exchanges": content.count("**User**") + content.count("**Rafi**")}
+        for date_str, content in daily_logs
+    ]
+
+    return {
+        "status": "running",
+        "services": {
+            "database": "online",
+            "llm_provider": registry.llm.active_name if hasattr(registry.llm, "active_name") else "unknown",
+            "llm_available": registry.llm.available if hasattr(registry.llm, "available") else [],
+            "channels": channel_manager.available_channels if channel_manager else [],
+            "heartbeat": "active",
+        },
+        "memory": {
+            "soul": bool(memory_files.load_soul()),
+            "user": bool(memory_files.load_user()),
+            "long_term": bool(memory_files.load_memory()),
+            "agents": bool(memory_files.load_agents()),
+            "heartbeat": not memory_files.is_heartbeat_empty(),
+        },
+        "daily_logs": log_stats,
+        "tools": registry.tools.tool_names if registry.tools else [],
+    }
+
+
+@app.get("/api/dashboard/feedback")
+async def dashboard_feedback(request: Request) -> dict[str, Any]:
+    """Get recent feedback signals for the dashboard."""
+    db: SupabaseClient = request.app.state.db
+    llm = request.app.state.llm
+    memory_files: MemoryFileService = request.app.state.memory_files
+
+    learning = LearningService(db=db, llm=llm, memory_files=memory_files)
+    feedback = await learning.get_recent_feedback(days=7, limit=20)
+
+    return {
+        "count": len(feedback),
+        "signals": feedback,
+    }
 
 
 # OAuth callback route

@@ -133,6 +133,26 @@ CREATE INDEX IF NOT EXISTS idx_events_cache_start_time ON events_cache (start_ti
 CREATE INDEX IF NOT EXISTS idx_events_cache_reminded ON events_cache (reminded);
 
 -- =============================================================================
+-- Table: feedback
+-- Stores user satisfaction signals (explicit ratings, implicit sentiment)
+-- for the continuous learning system.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS feedback (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    signal_type TEXT NOT NULL CHECK (signal_type IN ('explicit_rating', 'implicit_sentiment')),
+    rating INTEGER CHECK (rating IS NULL OR (rating >= 1 AND rating <= 10)),
+    sentiment TEXT CHECK (sentiment IS NULL OR sentiment IN ('positive', 'negative', 'neutral')),
+    user_message TEXT DEFAULT '',
+    assistant_response TEXT DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'telegram_text',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feedback_signal_type ON feedback (signal_type);
+CREATE INDEX IF NOT EXISTS idx_feedback_sentiment ON feedback (sentiment);
+
+-- =============================================================================
 -- RPC Function: match_messages
 -- Performs cosine similarity search on message embeddings via pgvector.
 -- Used by the memory service for semantic recall.
@@ -272,4 +292,7 @@ CREATE POLICY service_role_all_settings ON settings
 CREATE POLICY service_role_all_oauth_tokens ON oauth_tokens
     FOR ALL USING (auth.role() = 'service_role');
 CREATE POLICY service_role_all_events_cache ON events_cache
+    FOR ALL USING (auth.role() = 'service_role');
+ALTER TABLE feedback ENABLE ROW LEVEL SECURITY;
+CREATE POLICY service_role_all_feedback ON feedback
     FOR ALL USING (auth.role() = 'service_role');

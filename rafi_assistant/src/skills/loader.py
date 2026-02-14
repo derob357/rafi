@@ -125,32 +125,47 @@ def filter_eligible(skills: list[Skill]) -> list[Skill]:
     Returns:
         List of eligible skills.
     """
-    eligible: list[Skill] = []
-
-    for skill in skills:
-        if not skill.enabled:
-            logger.debug("Skill %s is disabled, skipping", skill.name)
-            continue
-
-        missing_env = [
-            var for var in skill.requires_env
-            if not os.environ.get(var)
-        ]
-
-        if missing_env:
-            logger.debug(
-                "Skill %s missing env vars: %s, skipping",
-                skill.name, missing_env,
-            )
-            continue
-
-        eligible.append(skill)
+    ineligibility_reasons = get_ineligibility_reasons(skills)
+    eligible = [skill for skill in skills if skill.name not in ineligibility_reasons]
 
     logger.info(
         "Eligible skills: %d/%d",
         len(eligible), len(skills),
     )
     return eligible
+
+
+def get_ineligibility_reasons(skills: list[Skill]) -> dict[str, dict[str, Any]]:
+    """Return ineligibility reasons for each discovered skill.
+
+    Args:
+        skills: List of discovered skills.
+
+    Returns:
+        Mapping of skill name -> reason payload.
+        Current reason keys:
+        - disabled: bool
+        - missing_env: list[str]
+    """
+    reasons: dict[str, dict[str, Any]] = {}
+
+    for skill in skills:
+        skill_reasons: dict[str, Any] = {}
+
+        if not skill.enabled:
+            skill_reasons["disabled"] = True
+
+        missing_env = [
+            var for var in skill.requires_env
+            if not os.environ.get(var)
+        ]
+        if missing_env:
+            skill_reasons["missing_env"] = missing_env
+
+        if skill_reasons:
+            reasons[skill.name] = skill_reasons
+
+    return reasons
 
 
 def build_skill_prompt(skills: list[Skill]) -> str:
@@ -194,3 +209,58 @@ def get_tool_names_for_skills(skills: list[Skill]) -> set[str]:
     for skill in skills:
         names.update(skill.tools)
     return names
+
+
+def build_startup_validation_report(
+    discovered_skills: list[Skill],
+    eligible_skills: list[Skill],
+    ineligibility_reasons: dict[str, dict[str, Any]],
+    exposed_tools: list[str],
+) -> str:
+    """Build a concise startup report for skills, env gates, and exposed tools.
+
+    Args:
+        discovered_skills: All discovered skills.
+        eligible_skills: Skills that passed env/enablement checks.
+        ineligibility_reasons: Per-skill ineligibility details.
+        exposed_tools: Tool names currently exposed to the LLM.
+
+    Returns:
+        Multiline report string for startup logs.
+    """
+    discovered_names = sorted(skill.name for skill in discovered_skills)
+    enabled_names = sorted(skill.name for skill in eligible_skills)
+    ineligible_names = sorted(ineligibility_reasons.keys())
+
+    missing_env_by_skill: dict[str, list[str]] = {}
+    missing_env_flat: set[str] = set()
+    for skill_name, reasons in ineligibility_reasons.items():
+        missing_env = sorted(reasons.get("missing_env", []))
+        if missing_env:
+            missing_env_by_skill[skill_name] = missing_env
+            missing_env_flat.update(missing_env)
+
+    lines = [
+        "--- Startup Validation Report ---",
+        f"Skills discovered ({len(discovered_names)}): {', '.join(discovered_names) if discovered_names else 'none'}",
+        f"Skills enabled ({len(enabled_names)}): {', '.join(enabled_names) if enabled_names else 'none'}",
+        f"Skills ineligible ({len(ineligible_names)}): {', '.join(ineligible_names) if ineligible_names else 'none'}",
+    ]
+
+    if missing_env_by_skill:
+        lines.append(
+            f"Missing env vars ({len(missing_env_flat)}): {', '.join(sorted(missing_env_flat))}"
+        )
+        for skill_name in sorted(missing_env_by_skill):
+            lines.append(
+                f"  - {skill_name}: {', '.join(missing_env_by_skill[skill_name])}"
+            )
+    else:
+        lines.append("Missing env vars (0): none")
+
+    lines.append(
+        f"Exposed tools ({len(exposed_tools)}): {', '.join(sorted(exposed_tools)) if exposed_tools else 'none'}"
+    )
+    lines.append("---------------------------------")
+
+    return "\n".join(lines)

@@ -31,5 +31,5 @@ numpy>=1.24.0
 opencv-python>=4.8.0
 mss==10.0.0
 playwright>=1.40.0
-build123d>=0.3.0
+build123d>=0.3.0; python_version < "3.13"
 # pytest-playwright

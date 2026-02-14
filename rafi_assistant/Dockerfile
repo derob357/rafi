@@ -1,8 +1,8 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# Install system dependencies for Playwright, CAD (Build123d), and UI
+# Install system dependencies for Playwright, CAD (Build123d), and audio
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libgl1-mesa-glx \
@@ -26,17 +26,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium --with-deps
 
+# Copy application code
 COPY src/ ./src/
-COPY config/ ./config/
+COPY skills/ ./skills/
+COPY memory/ ./memory/
 
-RUN mkdir -p /data/logs
+# Create data directories
+RUN mkdir -p /data/logs /data/memory/daily
+
+# Health check — hit the /health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
+# Run with uvicorn
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

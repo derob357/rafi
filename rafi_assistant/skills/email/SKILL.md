@@ -6,7 +6,9 @@ tools:
   - search_emails
   - send_email
 requires:
-  env: []
+  env:
+    - GOOGLE_CLIENT_ID
+    - GOOGLE_CLIENT_SECRET
 ---
 
 # Email Skill

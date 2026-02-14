@@ -6,7 +6,9 @@ services:
     env_file: .env
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      - ./data:/data
+      - ./memory:/app/memory
+      - ./skills:/app/skills:ro
+      - rafi-data:/data
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -14,6 +16,12 @@ services:
       - RAFI_CONFIG_PATH=/app/config.yaml
     networks:
       - rafi-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
 
   tunnel:
     image: cloudflare/cloudflared:latest
@@ -25,7 +33,12 @@ services:
     networks:
       - rafi-network
     depends_on:
-      - rafi
+      rafi:
+        condition: service_healthy
+
+volumes:
+  rafi-data:
+    driver: local
 
 networks:
   rafi-network:

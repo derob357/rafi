@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 ALLOWED_SOURCES = {
     "telegram_text",
     "telegram_voice",
+    "whatsapp_text",
     "twilio_call",
     "system",
 }

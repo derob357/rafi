@@ -8,7 +8,9 @@ tools:
   - delete_event
   - get_google_auth_url
 requires:
-  env: []
+  env:
+    - GOOGLE_CLIENT_ID
+    - GOOGLE_CLIENT_SECRET
 ---
 
 # Calendar Skill
